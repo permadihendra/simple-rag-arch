@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+rpm_spec_list*
+runtime/.active_*
+runtime/runtime_prompt.md
