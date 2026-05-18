@@ -87,7 +87,17 @@ Built and deployed swappable plugins for both AI platforms.
 
 ## Phase 3: Next Steps 🔜
 
-- [ ] Heartbeat integration — auto-check pending N+1 steps during heartbeats
-- [ ] Better session summaries — auto-extract key topics from conversation
+### From N+1 Tracking (active)
+
+| Prio | Item | Status |
+|------|------|--------|
+| 🥇 3 | Complete integration tests for both platform plugins | Pending |
+| 🥇 2 | Heartbeat integration — auto-check pending N+1 steps during heartbeats | Pending |
+| 🥇 — | Rework `/rag-status` output: add agent_id, last 3 sessions per agent with checkpoint & N+1 info | Pending |
+| 🥇 — | Rework `/rag-end`: tell LLM to generate session summaries and feed them to rag session summary | ✅ Done |
+
+### Future (nice-to-have)
+
 - [ ] sqlite-vec eval (optional)
 - [ ] Remote sync (Tailscale)
+- [ ] Better session summaries — auto-extract key topics from conversation

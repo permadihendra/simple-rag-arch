@@ -507,12 +507,14 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
     name: "rag_end_session",
     label: "🏁 RAG End Session",
     description:
-      "End the current RAG session with a summary. Call this when work is complete. " +
-      "What you provide here will be remembered in future sessions.",
-    promptSnippet: "End RAG session with summary — saves what worked/failed as notes",
+      "End the current RAG session with a detailed summary. Call this when work is complete. " +
+      "Before calling this, review the conversation and generate a structured summary " +
+      "with what_worked and what_failed. What you provide here will be remembered in future sessions.",
+    promptSnippet: "End RAG session with summary — review conversation first, then save what worked/failed as notes",
     promptGuidelines: [
-      "When the user seems done, or explicitly says 'end session' — call rag_end_session with a meaningful summary.",
-      "Include what_worked and what_failed — these get auto-saved as notes for future recall.",
+      "When the user seems done, or explicitly says 'end session' — FIRST review the full conversation, THEN call rag_end_session with a meaningful, comprehensive summary.",
+      "Include what_worked and what_failed — these get auto-saved as notes for future recall. Be specific, not generic.",
+      "A good summary answers: What did we achieve? What decisions were made? What files were touched? What's the state of things?",
     ],
     parameters: Type.Object({
       summary: Type.String({
@@ -702,15 +704,31 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("rag-end", {
-    description: "End the current RAG session with a summary: /rag-end <summary>",
+    description: "End the current RAG session — triggers LLM to generate a summary: /rag-end [notes]",
     handler: async (args, ctx) => {
       if (state.sessionId === null) {
         ctx.ui.notify("No active RAG session", "warning");
         return;
       }
-      const summary = args.trim() || `Session ${state.sessionId}`;
-      doEndRagSession(summary, state.whatWorked, state.whatFailed);
-      ctx.ui.notify(`✅ Session ${state.sessionId} ended`, "info");
+
+      // Don't end immediately — ask the LLM to review the conversation
+      // and generate a proper structured summary via rag_end_session tool.
+      const userNotes = args.trim()
+        ? `\n\nAdditional notes from user:\n${args.trim()}`
+        : '';
+
+      ctx.ui.notify(`🧠 Reviewing session #${state.sessionId} to generate summary...`, "info");
+
+      pi.sendUserMessage(
+        `[RAG End Session] The user wants to end this RAG session (session #${state.sessionId}). ` +
+        `Please review the conversation above and generate a proper structured summary, ` +
+        `then call the \`rag_end_session\` tool with the following fields:\n\n` +
+        `- **summary**: A comprehensive summary of what was accomplished this session\n` +
+        `- **whatWorked**: Comma-separated list of things that went well or were completed\n` +
+        `- **whatFailed**: Comma-separated list of things that failed, are blocked, or need follow-up` +
+        userNotes,
+        { triggerTurn: true }
+      );
     },
   });
 
