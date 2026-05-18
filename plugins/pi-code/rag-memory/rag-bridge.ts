@@ -146,6 +146,14 @@ export function listAgents(): Record<string, any>[] {
   try { return JSON.parse(raw) as Record<string, any>[]; } catch { return []; }
 }
 
+export function getRecentSessions(agentId: string, limit = 3): RagSession[] {
+  const raw = runPy(
+    `from db import get_recent_sessions; ss = get_recent_sessions(${JSON.stringify(agentId)}, ${limit}); print(json.dumps([dict(s) for s in ss]))`
+  );
+  if (!raw) return [];
+  try { return JSON.parse(raw) as RagSession[]; } catch { return []; }
+}
+
 export function saveCheckpoint(
   sessionId: number | null, taskId: string, step: number, status = "running"
 ): boolean {

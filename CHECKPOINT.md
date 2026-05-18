@@ -93,7 +93,7 @@ Built and deployed swappable plugins for both AI platforms.
 |------|------|--------|
 | 🥇 3 | Complete integration tests for both platform plugins | ✅ Done |
 | 🥇 2 | Heartbeat integration — auto-check pending N+1 steps during heartbeats | ✅ Done |
-| 🥇 — | Rework `/rag-status` output: add agent_id, last 3 sessions per agent with checkpoint & N+1 info | Pending |
+| 🥇 — | Rework `/rag-status` output: add agent_id, last 3 sessions per agent with checkpoint & N+1 info | ✅ Done |
 | 🥇 — | Rework `/rag-end`: tell LLM to generate session summaries and feed them to rag session summary | ✅ Done |
 
 ### Future (nice-to-have)
@@ -117,3 +117,6 @@ Built and deployed swappable plugins for both AI platforms.
 | FTS5 `*` query handled gracefully | ✅ | Bare `*` no longer causes noisy debug messages; returns empty FTS5 query (triggers LIKE fallback) |
 | Integration tests | ✅ | 64 tests covering DB init, agent CRUD, sessions, FTS5, checkpoints, N+1, context, exports, plugin deployment, edge cases |
 | `make test` target | ✅ | Runs full test suite with one command |
+| `/rag-status` rework | ✅ | Shows agent name+id, last 3 sessions with stats, pending checkpoints with icons, N+1 steps, all registered agents |
+| `rag_status` tool rework | ✅ | LLM-facing tool now shows same rich output as slash command |
+| `getRecentSessions` bridge | ✅ | New rag-bridge function for fetching per-agent sessions |

@@ -513,30 +513,47 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
     async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
       const lines: string[] = [];
       const agentId = getAgentId();
-
       const agent = rag.getAgent(agentId);
-      lines.push(agent
-        ? `**Agent**: ${agent.name} (${agent.id})`
-        : `**Agent**: ${agentId} (not registered in RAG)`);
 
-      lines.push(`**Active RAG session**: ${state.sessionId ?? "none"}`);
-      lines.push(`**Turns this session**: ${state.turnCount}`);
-      lines.push(`**DB ready**: ${dbReady ? "✅" : "❌"}`);
+      lines.push(`**Agent**: ${agent ? `${agent.name} (${agent.id})` : agentId}`);
+      lines.push(`**Session**: ${state.sessionId ?? "none"} | **Turns**: ${state.turnCount} | **DB**: ${dbReady ? "✅" : "❌"}`);
+      lines.push(`**This session**: ${state.sessionNoteCount} notes, ${state.sessionCheckpointCount} checkpoints`);
 
       if (dbReady && agentId) {
+        // Last 3 sessions
+        const recent = rag.getRecentSessions(agentId, 3);
+        if (recent.length > 0) {
+          lines.push(`\n**Recent sessions** (${recent.length}):`);
+          for (const s of recent) {
+            const summary = (s.summary || "no summary").slice(0, 80);
+            const dur = s.duration_s ? `${s.duration_s}s` : "—";
+            const tk = s.token_count || 0;
+            let stats = `#${s.id} | ${dur} | ${tk} tokens`;
+            if (s.what_worked) {
+              try { stats += ` | ✓${JSON.parse(s.what_worked).length} worked`; } catch {}
+            }
+            if (s.what_failed) {
+              try { stats += ` | ✗${JSON.parse(s.what_failed).length} failed`; } catch {}
+            }
+            lines.push(`  - ${stats}`);
+            lines.push(`    ${summary}`);
+          }
+        }
+
         // Pending checkpoints
         const tasks = rag.getPendingTasks(agentId);
         if (tasks.length > 0) {
-          lines.push(`\n**Pending tasks** (${tasks.length}):`);
+          lines.push(`\n**Pending checkpoints** (${tasks.length}):`);
           for (const t of tasks) {
-            lines.push(`  - ${t.task_id} step ${t.step} → ${t.status} (retries: ${t.retry_count})`);
+            const icon = t.status === "running" ? "▶️" : t.status === "failed" ? "❌" : "⏳";
+            lines.push(`  - ${icon} ${t.task_id} step ${t.step} → ${t.status} (retries: ${t.retry_count})`);
           }
         } else {
-          lines.push("\n**Pending tasks**: none ✅");
+          lines.push("\n**Pending checkpoints**: none ✅");
         }
 
         // N+1: Pending next steps
-        const nextSteps = rag.getPendingNextSteps(agentId);
+        const nextSteps = rag.getPendingNextSteps(agentId, 5);
         if (nextSteps.length > 0) {
           lines.push(`\n**N+1 — Next steps** (${nextSteps.length}):`);
           for (const ns of nextSteps) {
@@ -547,18 +564,20 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
           lines.push("\n**N+1 — Next steps**: none ✅");
         }
 
+        // All registered agents
         const allAgents = rag.listAgents();
         if (allAgents.length > 0) {
           lines.push(`\n**Registered agents** (${allAgents.length}):`);
           for (const a of allAgents) {
-            lines.push(`  - ${a.name} (${a.id})`);
+            const marker = a.id === agentId ? " ← current" : "";
+            lines.push(`  - ${a.name} (${a.id})${marker}`);
           }
         }
       }
 
       return {
         content: [{ type: "text", text: lines.join("\n") }],
-        details: { sessionId: state.sessionId, turnCount: state.turnCount, dbReady },
+        details: { sessionId: state.sessionId, turnCount: state.turnCount, dbReady, agentId },
       };
     },
   });
@@ -778,30 +797,68 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("rag-status", {
-    description: "Show RAG memory status including N+1 next steps",
+    description: "Show RAG memory status — sessions, checkpoints, N+1 for all agents",
     handler: async (_args, ctx) => {
       const agentId = getAgentId();
-      const tasks = rag.getPendingTasks(agentId);
-      const nextSteps = rag.getPendingNextSteps(agentId);
       const agent = rag.getAgent(agentId);
       const lines = [
-        `🧠 RAG: ${agent ? agent.name : agentId}`,
-        `   Session: ${state.sessionId ?? "none"}`,
-        `   Turns: ${state.turnCount}`,
-        `   DB: ${dbReady ? "✅" : "❌"}`,
+        `🧠 RAG Memory Status`,
+        `   Agent: ${agent ? agent.name + ` (${agent.id})` : agentId}`,
+        `   Current Session: ${state.sessionId ?? "none"}  |  Turns: ${state.turnCount}`,
+        `   DB: ${dbReady ? "✅ ready" : "❌ unavailable"}`,
+        `   This session: ${state.sessionNoteCount} notes, ${state.sessionCheckpointCount} checkpoints`,
       ];
-      if (tasks.length > 0) {
-        lines.push(`   Pending tasks (${tasks.length}):`);
-        for (const t of tasks) {
-          lines.push(`     - ${t.task_id} step ${t.step} → ${t.status}`);
+
+      // Last 3 sessions for current agent
+      if (dbReady) {
+        const recent = rag.getRecentSessions(agentId, 3);
+        if (recent.length > 0) {
+          lines.push(`\n   📋 Recent sessions (${recent.length}):`);
+          for (const s of recent) {
+            const summary = (s.summary || "no summary").slice(0, 60);
+            const dur = s.duration_s ? `${s.duration_s}s` : "—";
+            const ww = s.what_worked ? `✓${JSON.parse(s.what_worked).length}` : "—";
+            const wf = s.what_failed ? `✗${JSON.parse(s.what_failed).length}` : "—";
+            const tk = s.token_count || 0;
+            lines.push(`     #${s.id} | ${dur} | ${tk}t | w:${ww} f:${wf} | ${summary}`);
+          }
+        }
+
+        // Pending tasks (checkpoints)
+        const tasks = rag.getPendingTasks(agentId);
+        if (tasks.length > 0) {
+          lines.push(`\n   📍 Pending checkpoints (${tasks.length}):`);
+          for (const t of tasks) {
+            const icon = t.status === "running" ? "▶️" : t.status === "failed" ? "❌" : "⏳";
+            lines.push(`     ${icon} ${t.task_id} step ${t.step} → ${t.status} (retries: ${t.retry_count})`);
+          }
+        } else {
+          lines.push(`\n   ✅ No pending checkpoints`);
+        }
+
+        // N+1 next steps
+        const nextSteps = rag.getPendingNextSteps(agentId, 5);
+        if (nextSteps.length > 0) {
+          lines.push(`\n   ➡️ N+1 Next steps (${nextSteps.length}):`);
+          for (const ns of nextSteps) {
+            const prio = ns.priority > 0 ? ` [prio:${ns.priority}]` : "";
+            lines.push(`     ${ns.id}. ${ns.description}${prio}`);
+          }
+        } else {
+          lines.push(`\n   ✅ No pending N+1 steps`);
+        }
+
+        // All registered agents
+        const allAgents = rag.listAgents();
+        if (allAgents.length > 0) {
+          lines.push(`\n   👤 Registered agents (${allAgents.length}):`);
+          for (const a of allAgents) {
+            const marker = a.id === agentId ? " ← current" : "";
+            lines.push(`     ${a.name} (${a.id})${marker}`);
+          }
         }
       }
-      if (nextSteps.length > 0) {
-        lines.push(`   N+1 next steps (${nextSteps.length}):`);
-        for (const ns of nextSteps) {
-          lines.push(`     ${ns.id}. ${ns.description}`);
-        }
-      }
+
       ctx.ui.notify(lines.join("\n"), "info");
     },
   });
