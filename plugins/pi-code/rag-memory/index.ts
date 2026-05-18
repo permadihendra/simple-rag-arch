@@ -217,13 +217,39 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
     }
   });
 
+  // ── Helpers ─────────────────────────────────────────────────────────
+
+  /** Check if a prompt looks like a heartbeat (short, periodic check-in) */
+  function isHeartbeat(prompt: string): boolean {
+    const lower = prompt.trim().toLowerCase();
+    // Heartbeat indicators: very short, contains keywords, or is periodic-status-ish
+    const heartbeatKeywords = ["heartbeat", "heart beat", "check in", "status check", "ping"];
+    if (heartbeatKeywords.some(k => lower.includes(k))) return true;
+    // Very short prompts (<=15 chars) that aren't commands are likely heartbeats
+    if (lower.length <= 15 && !lower.startsWith("/")) return true;
+    return false;
+  }
+
   // ── Before each turn: inject RAG rules + context ──────────────────
 
   pi.on("before_agent_start", async (event, ctx) => {
     state.turnCount++;
 
+    const agentId = getAgentId();
+    const isHb = isHeartbeat(event.prompt);
+
     // Always inject RAG usage rules so the LLM knows to use memory first
-    const ragRules = `
+    const ragRules = isHb
+      ? `
+── RAG Memory Rules (HEARTBEAT) — YOU MUST FOLLOW THESE ──
+1. During heartbeat/quiet periods: call rag_status to check pending N+1 steps.
+2. If there are pending N+1 tasks, work on them proactively.
+3. Check rag_search for recent memory that might need attention.
+4. If something worth remembering happened, call rag_note.
+5. Call rag_checkpoint for any progress made.
+6. When finished with all N+1 items, reply HEARTBEAT_OK to stay quiet.
+`
+      : `
 ── RAG Memory Rules — YOU MUST FOLLOW THESE ──
 1. When asked about PAST WORK, PROJECT HISTORY, or things you "should know" — call rag_search FIRST before answering.
 2. When user says "remember this", "save this", "note this" — call rag_note immediately.
@@ -238,7 +264,6 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
       return { systemPrompt: event.systemPrompt + ragRules };
     }
 
-    const agentId = getAgentId();
     const prompt = rag.buildRuntimePrompt(agentId, 3000);
 
     // Build current-session activity snippet
@@ -249,12 +274,28 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
     if (state.sessionCheckpointCount > 0) {
       sessionActivity.push(`📍 ${state.sessionCheckpointCount} checkpoint(s) created this session`);
     }
+
+    // Flush pending memory hints — user wanted to save something
     if (state.pendingMemoryHints.length > 0) {
-      // Flush pending hints — user wanted to save something but LLM may have missed it
       for (const hint of state.pendingMemoryHints) {
         sessionActivity.push(`⏳ User mentioned something to remember: "${hint.text.slice(0, 120)}..." — consider calling rag_note if you haven't already`);
       }
-      state.pendingMemoryHints = []; // Flush after surfacing once
+      state.pendingMemoryHints = [];
+    }
+
+    // If heartbeat, also fetch and inject pending N+1 steps prominently
+    if (isHb && dbReady) {
+      const nextSteps = rag.getPendingNextSteps(agentId, 5);
+      if (nextSteps.length > 0) {
+        sessionActivity.push(`\n📋 Pending N+1 steps (check these during heartbeat):`);
+        for (const ns of nextSteps) {
+          const prio = ns.priority > 0 ? ` [prio:${ns.priority}]` : "";
+          sessionActivity.push(`   ${ns.id}. ${ns.description}${prio}`);
+        }
+        sessionActivity.push(`\n💡 Pro tip: Work on the highest-priority N+1 item. Call rag_next_step after completing each one.`);
+      } else {
+        sessionActivity.push(`\n✅ No pending N+1 steps. Reply HEARTBEAT_OK.`);
+      }
     }
 
     const activityBlock = sessionActivity.length > 0

@@ -91,8 +91,8 @@ Built and deployed swappable plugins for both AI platforms.
 
 | Prio | Item | Status |
 |------|------|--------|
-| 🥇 3 | Complete integration tests for both platform plugins | Pending |
-| 🥇 2 | Heartbeat integration — auto-check pending N+1 steps during heartbeats | Pending |
+| 🥇 3 | Complete integration tests for both platform plugins | ✅ Done |
+| 🥇 2 | Heartbeat integration — auto-check pending N+1 steps during heartbeats | ✅ Done |
 | 🥇 — | Rework `/rag-status` output: add agent_id, last 3 sessions per agent with checkpoint & N+1 info | Pending |
 | 🥇 — | Rework `/rag-end`: tell LLM to generate session summaries and feed them to rag session summary | ✅ Done |
 
@@ -101,3 +101,19 @@ Built and deployed swappable plugins for both AI platforms.
 - [ ] sqlite-vec eval (optional)
 - [ ] Remote sync (Tailscale)
 - [ ] Better session summaries — auto-extract key topics from conversation
+
+---
+
+## Phase 4: RAG Workflow Improvements ✅
+
+| Improvement | Status | Details |
+|-------------|--------|---------|
+| Auto-note extraction from user hints | ✅ | Detects "remember this", "save this", "note this" in user messages and surfaces them as pending memory hints in next turn's context |
+| Session activity tracking | ✅ | Tracks notes saved, checkpoints created this session; injects into `before_agent_start` context |
+| Auto-track whatWorked from tool calls | ✅ | Successful tool calls (non-search, non-status) auto-added to whatWorked |
+| Smarter shutdown summaries | ✅ | Includes activity stats (notes, checkpoints, pending hints) in interrupted session summary |
+| Heartbeat-aware N+1 prompting | ✅ | Detects heartbeat prompts, injects pending N+1 steps proactively with actionable instructions |
+| Context budget increased | ✅ | 2000 → 3000 tokens for richer context |
+| FTS5 `*` query handled gracefully | ✅ | Bare `*` no longer causes noisy debug messages; returns empty FTS5 query (triggers LIKE fallback) |
+| Integration tests | ✅ | 64 tests covering DB init, agent CRUD, sessions, FTS5, checkpoints, N+1, context, exports, plugin deployment, edge cases |
+| `make test` target | ✅ | Runs full test suite with one command |
