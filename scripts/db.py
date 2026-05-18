@@ -478,7 +478,7 @@ def add_note(agent_id: str, title: str, content: str,
 def _fts_query(text: str) -> str:
     """Convert user text to FTS5 query. Handles multi-word AND search."""
     text = text.strip()
-    if not text:
+    if not text or text == "*":
         return '""'
     # If it looks like already-formatted FTS5, use as-is
     if any(op in text for op in (" AND ", " OR ", " NOT ", "*", '"')):
@@ -507,8 +507,7 @@ def search_notes(query: str, limit: int = 5) -> list[dict]:
                LIMIT ?""",
             (fts_q, limit),
         ).fetchall()
-    except sqlite3.OperationalError as e:
-        print(f'  [debug] FTS5 fallback for "{fts_q}": {e}')
+    except sqlite3.OperationalError:
         # FTS5 error → fallback to LIKE
         pattern = f"%{query}%"
         rows = c.execute(

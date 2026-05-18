@@ -1,7 +1,7 @@
-# Mac Node Setup
+# Bug: Rate Limiting
 
-- **Tags**: infrastructure, mac, node
-- **Created**: 2026-05-18T16:22:51Z
-- **Importance**: 3
+- **Tags**: bug, blocker
+- **Created**: 2026-05-18T18:35:43Z
+- **Importance**: 5
 
-Mac node QKVMQ7_920084. Tailscale 100.123.120.59. Brave browser with brave-agent profile (CDP 9222). OpenClaw v2026.5.7 via Homebrew.
+OpenAI rate limits hit at 100 req/min during batch
