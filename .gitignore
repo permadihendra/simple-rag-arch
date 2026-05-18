@@ -22,6 +22,14 @@ memory/memory.db
 memory/memory.db-wal
 memory/memory.db-shm
 
+# ── Auto-generated exports (derived from DB, not source of truth) ───────────
+memory/notes/*.md
+memory/sessions/*.md
+memory/checkpoints/*.md
+!memory/notes/.gitkeep
+!memory/sessions/.gitkeep
+!memory/checkpoints/.gitkeep
+
 # ── Virtual environments ────────────────────────────────────────────────────
 .env
 .venv
