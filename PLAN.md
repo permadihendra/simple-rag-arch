@@ -46,6 +46,83 @@ Memory quality > infrastructure complexity.
 
 ---
 
+## Retrieval Architecture (V2 — Intelligence Layer)
+
+The system now includes a **Retrieval Router** — a middleware layer that orchestrates all memory access with confidence-based decisions.
+
+```text
+User Query
+    ↓
+Retrieval Router (middleware/retrieval_router.py)
+    ↓
+1. Active Checkpoints          ← Priority 1 (resumable workflows)
+2. Recent Session Summaries    ← Priority 2 (recent context)
+3. FTS5 Keyword Search         ← Priority 3 (fast, reliable)
+4. Embedding Search            ← Priority 4 (optional, future)
+    ↓
+Confidence Scoring
+    ↓
+IF confidence ≥ threshold → return local results
+ELSE → signal "low confidence" → external search fallback
+    ↓
+LLM gets curated context
+```
+
+**Key principle:** Treat local memory like **L1 cache**, external search like **L2 cache**. Local is always checked first.
+
+---
+
+### Retrieval Priority Chain
+
+| Priority | Source | Why | Confidence Signal |
+|----------|--------|-----|-------------------|
+| 🥇 **1** | Active checkpoints | Interrupted workflows are the most time-critical memory | Exact task match = high |
+| 🥇 **2** | Recent session summaries | Continuity from last sessions | Recency = medium |
+| 🥇 **3** | FTS5 keyword search | Fast, deterministic, reliable | BM25 rank + keyword match |
+| 🥇 **4** | Embedding search (future) | Semantic similarity when needed | Cosine similarity = optional |
+| 🥇 **5** | External search fallback | Only when local confidence is LOW | N/A — last resort |
+
+---
+
+### Confidence Scoring
+
+Each result is scored on multiple signals, then a decision is made:
+
+| Signal | Weight | Example |
+|--------|--------|---------|
+| Exact keyword match | +3 | Query "login retry" matches note title "login retry fix" |
+| Same agent namespace | +2 | Memory was created by the same agent asking |
+| Recency (< 24h) | +2 | Session from today, not last week |
+| FTS5 BM25 rank | +1 | Built-in relevance from SQLite FTS5 |
+| Tag overlap | +1 | Shared tags between query and stored memory |
+
+**Decision thresholds:**
+- **Score ≥ 5** → HIGH confidence → use local memory directly
+- **Score 3–4** → MEDIUM → present results with confidence note
+- **Score < 3** → LOW → trigger external search fallback
+
+---
+
+### Middleware Flow
+
+```text
+User Prompt
+    ↓
+retrieval_router.py
+    ↓
+multi-source retrieval (checkpoints → sessions → FTS5)
+    ↓
+confidence scoring
+    ↓
+prompt augmentation (curated context)
+    ↓
+LLM
+```
+
+The router decides *what* to retrieve and *whether* to use it — NOT the LLM.
+
+---
+
 ## File Migration Strategy
 
 OpenClaw's default directory has 8 config/memory files.
@@ -83,6 +160,9 @@ The RAG system manages the dynamic ones:
 │   ├── notes/                      ← Human-readable .md exports
 │   ├── checkpoints/                ← Human-readable .md exports
 │   └── logs/                       ← Raw session logs (optional)
+│
+├── middleware/
+│   └── retrieval_router.py         ← Retrieval router with confidence scoring
 │
 ├── scripts/
 │   ├── db.py                       ← Schema, CRUD, FTS5, context builder
@@ -328,8 +408,7 @@ See `memory-plugin.md` for full documentation.
 | **3** | FTS5 search + notes + tags | ✅ **DONE** (merged into Phase 1) |
 | **4** | Context budget calculator | ✅ **DONE** |
 | **5** | File exports | ✅ **DONE** |
-| — | **Integration tests** | 🔜 Next |
-| — | **OpenClaw integration** | 🔜 Next |
+| **6** | **Retrieval Router + Confidence Scoring** | ✅ **DONE** (V2) |
 | — | sqlite-vec embeddings | Future |
 
 ---
@@ -337,6 +416,9 @@ See `memory-plugin.md` for full documentation.
 ## Future Expansion (NOT V1)
 
 - sqlite-vec semantic search
+- Conditional external search fallback (web search integration)
+- Cross-agent memory relevance ranking
+- Automatic memory importance decay over time
 - FastAPI memory API
 - Telegram integration
 - Multi-device sync (Tailscale)

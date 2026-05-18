@@ -17,6 +17,11 @@ share/python-wheels/
 *.manifest
 *.spec
 
+# ── RAG database (source of truth, changes constantly) ─────────────────────
+memory/memory.db
+memory/memory.db-wal
+memory/memory.db-shm
+
 # ── Virtual environments ────────────────────────────────────────────────────
 .env
 .venv
