@@ -34,6 +34,13 @@ interface RAGSessionState {
   turnCount: number;
   whatWorked: string[];
   whatFailed: string[];
+  /** Track user messages that mention saving/remembering, so we can auto-extract notes */
+  pendingMemoryHints: Array<{ text: string; timestamp: string }>;
+  /** Track if last turn had a rag_note call to avoid duplicates */
+  lastTurnHadNoteCall: boolean;
+  /** Current session note/checkpoint count for richer context */
+  sessionNoteCount: number;
+  sessionCheckpointCount: number;
 }
 
 // ── Extension Entry ─────────────────────────────────────────────────
@@ -58,6 +65,10 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
     turnCount: 0,
     whatWorked: [],
     whatFailed: [],
+    pendingMemoryHints: [],
+    lastTurnHadNoteCall: false,
+    sessionNoteCount: 0,
+    sessionCheckpointCount: 0,
   };
   let dbReady = false;
 
@@ -102,6 +113,10 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
       state.turnCount = 0;
       state.whatWorked = [];
       state.whatFailed = [];
+      state.pendingMemoryHints = [];
+      state.lastTurnHadNoteCall = false;
+      state.sessionNoteCount = 0;
+      state.sessionCheckpointCount = 0;
       pi.appendEntry("rag-session", {
         sessionId: sid,
         agentId,
@@ -133,6 +148,10 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
     state.turnCount = 0;
     state.whatWorked = [];
     state.whatFailed = [];
+    state.pendingMemoryHints = [];
+    state.lastTurnHadNoteCall = false;
+    state.sessionNoteCount = 0;
+    state.sessionCheckpointCount = 0;
   }
 
   // ── Restore state from persisted entries ────────────────────────────
@@ -183,8 +202,15 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async (_event, _ctx) => {
     if (state.sessionId !== null && dbReady) {
+      // Build a richer summary from tracked activity
+      const activity = [];
+      if (state.sessionNoteCount > 0) activity.push(`${state.sessionNoteCount} notes saved`);
+      if (state.sessionCheckpointCount > 0) activity.push(`${state.sessionCheckpointCount} checkpoints`);
+      if (state.pendingMemoryHints.length > 0) activity.push(`${state.pendingMemoryHints.length} pending memory hints`);
+      const activityStr = activity.length > 0 ? ` (${activity.join(", ")})` : "";
+
       doEndRagSession(
-        `Session ${state.sessionId}: ${state.turnCount} turns (interrupted)`,
+        `Session ${state.sessionId}: ${state.turnCount} turns${activityStr} — interrupted`,
         state.whatWorked,
         state.whatFailed
       );
@@ -213,28 +239,85 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
     }
 
     const agentId = getAgentId();
-    const prompt = rag.buildRuntimePrompt(agentId, 2000);
-    const contextBlock = prompt
-      ? `\n\n── RAG Memory Context ──\n${prompt}`
+    const prompt = rag.buildRuntimePrompt(agentId, 3000);
+
+    // Build current-session activity snippet
+    const sessionActivity: string[] = [];
+    if (state.sessionNoteCount > 0) {
+      sessionActivity.push(`📝 ${state.sessionNoteCount} note(s) saved this session`);
+    }
+    if (state.sessionCheckpointCount > 0) {
+      sessionActivity.push(`📍 ${state.sessionCheckpointCount} checkpoint(s) created this session`);
+    }
+    if (state.pendingMemoryHints.length > 0) {
+      // Flush pending hints — user wanted to save something but LLM may have missed it
+      for (const hint of state.pendingMemoryHints) {
+        sessionActivity.push(`⏳ User mentioned something to remember: "${hint.text.slice(0, 120)}..." — consider calling rag_note if you haven't already`);
+      }
+      state.pendingMemoryHints = []; // Flush after surfacing once
+    }
+
+    const activityBlock = sessionActivity.length > 0
+      ? `\n\n── This Session Activity ──\n${sessionActivity.join("\n")}`
       : "";
+
+    const contextBlock = prompt
+      ? `\n\n── RAG Memory Context ──\n${prompt}${activityBlock}`
+      : activityBlock;
 
     return {
       systemPrompt: event.systemPrompt + ragRules + contextBlock,
     };
   });
 
-  // ── Agent end: extract learnings ──────────────────────────────────
+  // ── Agent end: extract learnings + auto-note from user hints ────
 
   pi.on("agent_end", async (event, _ctx) => {
     const messages = event.messages;
+    let hadNoteCall = false;
+    let hadCheckpointCall = false;
+
     for (const msg of messages) {
-      if (msg.role === "tool" && msg.toolResult?.isError) {
-        const desc = `${msg.toolName}: ${String(msg.content ?? "").slice(0, 80)}`;
-        if (!state.whatFailed.includes(desc)) {
-          state.whatFailed.push(desc);
+      if (msg.role === "tool") {
+        // Track tool calls to know what the LLM already handled
+        if (msg.toolName === "rag_note") hadNoteCall = true;
+        if (msg.toolName === "rag_checkpoint") hadCheckpointCall = true;
+
+        // Track errors as whatFailed
+        if (msg.toolResult?.isError) {
+          const desc = `${msg.toolName}: ${String(msg.content ?? "").slice(0, 80)}`;
+          if (!state.whatFailed.includes(desc)) {
+            state.whatFailed.push(desc);
+          }
+        }
+
+        // Track successes as whatWorked
+        if (msg.toolResult && !msg.toolResult.isError && msg.toolName !== "rag_search" && msg.toolName !== "rag_status") {
+          const desc = `${msg.toolName}: ${String(msg.content ?? "").slice(0, 80)}`;
+          if (!state.whatWorked.includes(desc) && !desc.includes("No RAG results")) {
+            state.whatWorked.push(desc);
+          }
+        }
+      }
+
+      // Detect user messages asking to remember/save things (auto-note hints)
+      if (msg.role === "user" && typeof msg.content === "string") {
+        const lower = msg.content.toLowerCase();
+        const saveTriggers = ["remember this", "save this", "note this", "keep this", "don't forget"];
+        if (saveTriggers.some(t => lower.includes(t))) {
+          state.pendingMemoryHints.push({
+            text: msg.content.slice(0, 200),
+            timestamp: new Date().toISOString(),
+          });
         }
       }
     }
+
+    state.lastTurnHadNoteCall = hadNoteCall;
+
+    // If the LLM made a note call, bump our session counter
+    if (hadNoteCall) state.sessionNoteCount++;
+    if (hadCheckpointCall) state.sessionCheckpointCount++;
   });
 
   // ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ─

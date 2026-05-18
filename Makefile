@@ -1,6 +1,6 @@
 # Minimal Agent Memory System — Makefile
 
-.PHONY: init status register start end checkpoint context clean reset
+.PHONY: init status register start end checkpoint context clean reset test
 
 init:
 	cd scripts && python3 db.py init
@@ -35,6 +35,9 @@ clean:
 
 reset: clean init register
 	@echo "DB reset, agents re-registered"
+
+test:
+	.venv/bin/python3 scripts/test_integration.py
 
 tree:
 	@find . -not -path './.git/*' -not -path './memory/*.db*' -not -name '__pycache__' -not -path '*/__pycache__/*' | sort
