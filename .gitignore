@@ -1,7 +1,75 @@
+# ── Python ──────────────────────────────────────────────────────────────────
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.eggs/
+dist/
+build/
+develop-eggs/
+downloads/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.manifest
+*.spec
+
+# ── Virtual environments ────────────────────────────────────────────────────
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# ── Testing / linting ───────────────────────────────────────────────────────
+.tox/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+coverage/
+htmlcov/
+.coverage.*
+*.cover
+.pytest_cache/
+.cache/
+
+# ── IDE / editors ──────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.iml
+*.sublime-workspace
+*.sublime-project
+*.swp
+*.swo
+*~
+*.orig
+
+# ── OS files ───────────────────────────────────────────────────────────────
 .DS_Store
-rpm_spec_list*
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# ── RAG system runtime ─────────────────────────────────────────────────────
 runtime/.active_*
 runtime/runtime_prompt.md
+
+# ── Logs ────────────────────────────────────────────────────────────────────
+*.log
+memory/logs/*
+!memory/logs/.gitkeep
+
+# ── Editor backups ──────────────────────────────────────────────────────────
+*.bak
+*.bup

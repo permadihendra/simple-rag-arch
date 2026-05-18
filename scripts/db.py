@@ -427,9 +427,25 @@ def add_note(agent_id: str, title: str, content: str,
     return row
 
 
+def _fts_query(text: str) -> str:
+    """Convert user text to FTS5 query. Handles multi-word AND search."""
+    text = text.strip()
+    if not text:
+        return '""'
+    # If it looks like already-formatted FTS5, use as-is
+    if any(op in text for op in (" AND ", " OR ", " NOT ", "*", '"')):
+        return text
+    words = text.split()
+    if len(words) == 1:
+        return f'"{words[0]}"'
+    # Multi-word: AND search across all words
+    return " AND ".join(f'"{w}"' for w in words)
+
+
 def search_notes(query: str, limit: int = 5) -> list[dict]:
     """FTS5 keyword search over notes. Falls back to LIKE."""
     c = _conn()
+    fts_q = _fts_query(query)
     try:
         rows = c.execute(
             """SELECT n.*, GROUP_CONCAT(t.name, ', ') AS tags
@@ -441,10 +457,11 @@ def search_notes(query: str, limit: int = 5) -> list[dict]:
                GROUP BY n.id
                ORDER BY rank
                LIMIT ?""",
-            (query, limit),
+            (fts_q, limit),
         ).fetchall()
-    except sqlite3.OperationalError:
-        # FTS5 syntax error → fallback to LIKE
+    except sqlite3.OperationalError as e:
+        print(f'  [debug] FTS5 fallback for "{fts_q}": {e}')
+        # FTS5 error → fallback to LIKE
         pattern = f"%{query}%"
         rows = c.execute(
             """SELECT n.*, GROUP_CONCAT(t.name, ', ') AS tags
@@ -464,6 +481,7 @@ def search_notes(query: str, limit: int = 5) -> list[dict]:
 def search_sessions(query: str, limit: int = 5) -> list[dict]:
     """FTS5 keyword search over sessions. Falls back to LIKE."""
     c = _conn()
+    fts_q = _fts_query(query)
     try:
         rows = c.execute(
             """SELECT s.* FROM sessions_fts f
@@ -471,7 +489,7 @@ def search_sessions(query: str, limit: int = 5) -> list[dict]:
                WHERE sessions_fts MATCH ?
                ORDER BY rank
                LIMIT ?""",
-            (query, limit),
+            (fts_q, limit),
         ).fetchall()
     except sqlite3.OperationalError:
         pattern = f"%{query}%"
