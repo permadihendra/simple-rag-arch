@@ -292,6 +292,29 @@ This prevents context overflow regardless of how many sessions accumulate.
 
 ---
 
+## Platform Plugins ✅
+
+Two swappable plugins bridge AI agents with the RAG memory system:
+
+| Platform | Type | Location | Status |
+|----------|------|----------|--------|
+| **Pi Code** | TypeScript Extension | `~/.pi/agent/extensions/rag-memory/` | ✅ Loaded |
+| **OpenClaw** | JavaScript Plugin | `~/.openclaw/extensions/rag-memory/` | ✅ Loaded |
+
+**Tools provided to the LLM:**
+- `rag_search` — FTS5 full-text memory search
+- `rag_note` — Save knowledge with tags
+- `rag_status` — Check pending tasks & agents
+- `rag_checkpoint` — Save/resume workflows
+- `rag_end_session` (Pi only) — End session with summary
+- `rag_configure` (Pi only) — Switch agent identity
+
+**Toggle scripts:**
+- `scripts/toggle-pi-rag.sh [on|off|status]`
+- `scripts/toggle-oc-rag.sh [on|off|status]`
+
+See `memory-plugin.md` for full documentation.
+
 ## Development Priority (Revised)
 
 | Phase | Scope | Status |
