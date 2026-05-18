@@ -73,3 +73,5 @@ memory/logs/*
 # ── Editor backups ──────────────────────────────────────────────────────────
 *.bak
 *.bup
+runtime/.indexed_*
+runtime/.active_session_*
