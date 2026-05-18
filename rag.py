@@ -254,6 +254,27 @@ def start(
     if pending:
         console.print(f"[yellow]⚠ {len(pending)} pending task(s) — check [bold]rag status {aid}[/][/]")
 
+    # ── Launch platform TUI ──
+    rt_path = BASE / 'runtime' / 'runtime_prompt.md'
+    in_tmux = bool(os.environ.get('TMUX'))
+
+    if plat == 'openclaw':
+        console.print(f"\n[bold]Launching OpenClaw TUI for {name}...[/]")
+        if in_tmux:
+            os.system(f'tmux new-window -n "{aid}" "exec openclaw --model deepseek-v4-flash"')
+        else:
+            console.print(f"  [dim]→ Run: [bold]openclaw[/] in another terminal[/]")
+            console.print(f"  [dim]→ Context ready at: {rt_path}[/]")
+    elif plat == 'pi-code':
+        cmd = f'pi --append-system-prompt {rt_path}'
+        console.print(f"\n[bold]Launching Pi Code Agent...[/]")
+        if in_tmux:
+            os.system(f'tmux new-window -n "pi-{aid}" "exec {cmd}"')
+        else:
+            console.print(f"  [dim]→ Run: [bold]{cmd}[/][/]")
+    else:
+        console.print(f"  [dim]Context ready at: {rt_path}. Launch the platform manually.[/]")
+
 @app.command()
 def end(
     agent: Annotated[Optional[str], typer.Argument(help="Agent ID (interactive if omitted)")] = None,
