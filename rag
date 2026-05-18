@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# rag — Minimal Agent Memory System Launcher
+# Usage: rag [command] [args]
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV_DIR="$SCRIPT_DIR/.venv"
+
+# Ensure venv exists
+if [ ! -f "$VENV_DIR/bin/python3" ]; then
+    echo "🔧 Creating virtual environment..."
+    uv venv "$VENV_DIR" --python 3.14 >/dev/null 2>&1
+    "$VENV_DIR/bin/pip" install typer rich >/dev/null 2>&1
+    echo "✅ venv ready"
+fi
+
+exec "$VENV_DIR/bin/python3" "$SCRIPT_DIR/rag.py" "$@"
