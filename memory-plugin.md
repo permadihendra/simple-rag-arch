@@ -50,10 +50,23 @@ Both plugins call the same Python backend (`scripts/db.py`) via `child_process`,
 |------|---------|----------|---------|
 | `rag_search` | ✅ | ✅ | FTS5 search over notes & sessions |
 | `rag_note` | ✅ | ✅ | Save knowledge with tags |
-| `rag_status` | ✅ | ✅ | Show pending tasks & agents |
+| `rag_status` | ✅ | ✅ | Show pending tasks, N+1 steps & agents |
 | `rag_checkpoint` | ✅ | ✅ | Save/resume workflow checkpoints |
+| `rag_next_step` | ✅ | ✅ | Record N+1 for resumable workflows |
 | `rag_end_session` | ✅ | ❌ | End session with summary |
 | `rag_configure` | ✅ | ❌ | Switch agent identity on-the-fly |
+
+### Slash Commands (Pi Code only)
+
+| Command | Description |
+|---------|-------------|
+| `/rag-search <query>` | Search memory |
+| `/rag-status` | Show active session, pending tasks, N+1 |
+| `/rag-note Title \| Content \| tags` | Save a note (pipe-separated) |
+| `/rag-end <summary>` | End session |
+| `/rag-checkpoint <task> <step> [status]` | Save checkpoint |
+| `/rag-next <description> [priority]` | Set N+1 next step |
+| `/rag-config <agentId>` | Switch agent identity |
 
 ### Auto-behaviors
 
@@ -90,9 +103,21 @@ openclaw plugins disable rag-memory
 ~/simple-rag-arch/scripts/toggle-oc-rag.sh [on|off|status]
 ```
 
+## N+1 — Next Step Tracking
+
+Both plugins support tracking the *next* step after current work:
+
+1. When finishing a task step, call `rag_next_step` with what should happen next
+2. The step is stored in the `next_steps` table with priority and session linkage
+3. `rag_status` shows all pending N+1 items at the top of every session
+4. When a checkpoint succeeds, the agent is prompted to set the N+1
+
+This ensures **resumable workflows** — even if interrupted, the next session
+shows exactly what needs to happen next.
+
 ## Adding Another Platform
 
-1. Create `rag_search`, `rag_note`, `rag_status`, `rag_checkpoint` tools
+1. Create `rag_search`, `rag_note`, `rag_status`, `rag_checkpoint`, `rag_next_step` tools
 2. Call Python backend: `~/simple-rag-arch/.venv/bin/python3 -c "..."`  
 3. Wire up lifecycle hooks for context injection and session tracking
 4. Add README and register in this table

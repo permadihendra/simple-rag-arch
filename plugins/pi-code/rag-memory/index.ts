@@ -199,12 +199,13 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
     // Always inject RAG usage rules so the LLM knows to use memory first
     const ragRules = `
 ── RAG Memory Rules — YOU MUST FOLLOW THESE ──
-1. When the user asks about PAST WORK, PROJECT HISTORY, something you "should know", or anything referencing previous sessions — you MUST call rag_search FIRST before answering.
-2. When the user says "remember this", "save this", "note this", "keep this" — call rag_note immediately to persist it.
-3. When working on a multi-step task — call rag_checkpoint after each step so work is resumable.
-4. When the user seems done or explicitly ends — call rag_end_session with a good summary and what_worked/what_failed.
-5. At the start of any session, check rag_status to see what's pending.
-6. rag_search is your long-term memory — USE IT. Don't guess about past work, look it up.
+1. When asked about PAST WORK, PROJECT HISTORY, or things you "should know" — call rag_search FIRST before answering.
+2. When user says "remember this", "save this", "note this" — call rag_note immediately.
+3. Multi-step tasks — call rag_checkpoint after each step, then rag_next_step to say what N+1 is.
+4. When work is done — call rag_end_session with a summary + what_worked/what_failed.
+5. Start of session — check rag_status to see pending tasks and N+1 next steps.
+6. N+1 is critical: after finishing any step, record what should happen next so work is resumable.
+7. rag_search is your memory — USE IT. Don't guess.
 `;
 
     if (!dbReady) {
@@ -378,10 +379,11 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
     label: "📊 RAG Status",
     description:
       "Show the current RAG memory status — active session, pending tasks, " +
-      "registered agents, and DB health. Call this at the start of work to check context.",
-    promptSnippet: "Check RAG memory status and pending tasks",
+      "pending next steps (N+1), registered agents, and DB health. " +
+      "Call this at the start of work to check what needs to be done next.",
+    promptSnippet: "Check RAG memory status, pending tasks, and next steps (N+1)",
     promptGuidelines: [
-      "Call rag_status at the start of each session to see what work is pending and what was left unfinished.",
+      "Call rag_status at the start of each session to see what work is pending and what the next step (N+1) should be.",
     ],
     parameters: Type.Object({}),
     async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
@@ -398,6 +400,7 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
       lines.push(`**DB ready**: ${dbReady ? "✅" : "❌"}`);
 
       if (dbReady && agentId) {
+        // Pending checkpoints
         const tasks = rag.getPendingTasks(agentId);
         if (tasks.length > 0) {
           lines.push(`\n**Pending tasks** (${tasks.length}):`);
@@ -406,6 +409,18 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
           }
         } else {
           lines.push("\n**Pending tasks**: none ✅");
+        }
+
+        // N+1: Pending next steps
+        const nextSteps = rag.getPendingNextSteps(agentId);
+        if (nextSteps.length > 0) {
+          lines.push(`\n**N+1 — Next steps** (${nextSteps.length}):`);
+          for (const ns of nextSteps) {
+            const prio = ns.priority > 0 ? ` [prio:${ns.priority}]` : "";
+            lines.push(`  ${ns.id}. ${ns.description}${prio}`);
+          }
+        } else {
+          lines.push("\n**N+1 — Next steps**: none ✅");
         }
 
         const allAgents = rag.listAgents();
@@ -538,6 +553,53 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
     },
   });
 
+  // ── rag_next_step — N+1 tracking ────────────────────────────────
+  pi.registerTool({
+    name: "rag_next_step",
+    label: "➡️ RAG Next Step (N+1)",
+    description:
+      "Record what the NEXT step should be after the current work. " +
+      "This creates a 'N+1' todo that will be shown in future sessions. " +
+      "Use this when finishing a step — what should happen next?",
+    promptSnippet: "Record the next step (N+1) for resumable workflows",
+    promptGuidelines: [
+      "When finishing a task step, call rag_next_step to record what comes next (N+1).",
+      "This ensures work is resumable even if the session is interrupted.",
+    ],
+    parameters: Type.Object({
+      description: Type.String({
+        description: "What should happen next? Describe the next action clearly.",
+      }),
+      priority: Type.Optional(
+        Type.Number({
+          description: "Priority 0-5 (0=normal, 5=urgent)",
+          default: 0,
+        })
+      ),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+      if (!dbReady) {
+        return { content: [{ type: "text", text: "⚠ RAG database not available." }], details: {} };
+      }
+
+      const ns = rag.addNextStep(
+        params.description,
+        params.priority ?? 0,
+        state.sessionId
+      );
+
+      if (ns) {
+        state.whatWorked.push(`Next step: ${params.description.slice(0, 60)}`);
+        return {
+          content: [{ type: "text", text: `➡️ N+1 recorded: "${params.description}" (priority: ${params.priority ?? 0})` }],
+          details: { nextStepId: ns.id },
+        };
+      }
+
+      return { content: [{ type: "text", text: "❌ Failed to save next step" }], details: {}, isError: true };
+    },
+  });
+
   // ── rag_configure ─────────────────────────────────────────────────
   pi.registerTool({
     name: "rag_configure",
@@ -590,10 +652,11 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("rag-status", {
-    description: "Show RAG memory status",
+    description: "Show RAG memory status including N+1 next steps",
     handler: async (_args, ctx) => {
       const agentId = getAgentId();
       const tasks = rag.getPendingTasks(agentId);
+      const nextSteps = rag.getPendingNextSteps(agentId);
       const agent = rag.getAgent(agentId);
       const lines = [
         `🧠 RAG: ${agent ? agent.name : agentId}`,
@@ -605,6 +668,12 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
         lines.push(`   Pending tasks (${tasks.length}):`);
         for (const t of tasks) {
           lines.push(`     - ${t.task_id} step ${t.step} → ${t.status}`);
+        }
+      }
+      if (nextSteps.length > 0) {
+        lines.push(`   N+1 next steps (${nextSteps.length}):`);
+        for (const ns of nextSteps) {
+          lines.push(`     ${ns.id}. ${ns.description}`);
         }
       }
       ctx.ui.notify(lines.join("\n"), "info");
@@ -658,6 +727,32 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
       }
       const ok = rag.saveCheckpoint(state.sessionId, taskId, step, status);
       ctx.ui.notify(ok ? `📍 ${taskId} step ${step} → ${status}` : "❌ Failed", ok ? "info" : "error");
+      // Also prompt user about N+1
+      if (ok && status === "success") {
+        ctx.ui.notify("💡 Tip: use /rag-next <description> to set what comes next (N+1)", "info");
+      }
+    },
+  });
+
+  pi.registerCommand("rag-next", {
+    description: "Set the next step (N+1): /rag-next <description> [priority]",
+    handler: async (args, ctx) => {
+      const parts = args.trim().split(/\s+/);
+      const prio = parseInt(parts[parts.length - 1], 10);
+      const hasPrio = !isNaN(prio) && parts.length > 1;
+      const description = hasPrio ? parts.slice(0, -1).join(" ") : args.trim();
+
+      if (!description) {
+        ctx.ui.notify("Usage: /rag-next <what should happen next> [priority]", "warning");
+        return;
+      }
+
+      const ns = rag.addNextStep(description, hasPrio ? prio : 0, state.sessionId);
+      if (ns) {
+        ctx.ui.notify(`➡️ N+1: "${description}" saved${hasPrio ? ` (priority ${prio})` : ""}`, "info");
+      } else {
+        ctx.ui.notify("❌ Failed to save next step", "error");
+      }
     },
   });
 

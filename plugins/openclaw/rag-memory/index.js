@@ -169,6 +169,31 @@ function buildRuntimePrompt(agentId, maxTokens = 2000) {
   );
 }
 
+// ── N+1 Next Step Tracking ────────────────────────────────────────────
+
+function addNextStep(description, priority = 0, sessionId = null) {
+  const raw = runPy(
+    `from db import add_next_step; ns = add_next_step(${sessionId ?? "None"}, ${JSON.stringify(description)}, ${priority}); print(json.dumps(dict(ns)))`
+  );
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+function getPendingNextSteps(agentId, limit = 10) {
+  const raw = runPy(
+    `from db import get_pending_next_steps; steps = get_pending_next_steps(${JSON.stringify(agentId)}, ${limit}); print(json.dumps([dict(s) for s in steps]))`
+  );
+  if (!raw) return [];
+  try { return JSON.parse(raw); } catch { return []; }
+}
+
+function completeNextStep(nextStepId) {
+  const raw = runPy(
+    `from db import complete_next_step; complete_next_step(${nextStepId}); print("ok")`
+  );
+  return raw === "ok";
+}
+
 // ── Tool definitions ─────────────────────────────────────────────────
 
 function createRagSearchTool(api) {
@@ -294,7 +319,7 @@ function createRagStatusTool(api) {
     label: "RAG Status",
     description:
       "Show the current RAG memory status — active session, pending tasks, " +
-      "and registered agents. Check this before starting new work.",
+      "pending next steps (N+1), and registered agents. Check this before starting new work.",
     parameters: {
       type: "object",
       properties: {},
@@ -323,6 +348,18 @@ function createRagStatusTool(api) {
         lines.push("\n**Pending tasks**: none ✅");
       }
 
+      // N+1 next steps
+      const nextSteps = getPendingNextSteps(agentId);
+      if (nextSteps.length > 0) {
+        lines.push(`\n**N+1 — Next steps** (${nextSteps.length}):`);
+        for (const ns of nextSteps) {
+          const prio = ns.priority > 0 ? ` [prio:${ns.priority}]` : "";
+          lines.push(`  ${ns.id}. ${ns.description}${prio}`);
+        }
+      } else {
+        lines.push("\n**N+1 — Next steps**: none ✅");
+      }
+
       const allAgents = listAgents();
       if (allAgents.length > 0) {
         lines.push(`\n**Registered agents** (${allAgents.length}):`);
@@ -332,6 +369,43 @@ function createRagStatusTool(api) {
       }
 
       return textResult(lines.join("\n"));
+    },
+  };
+}
+
+function createRagNextStepTool(api) {
+  return {
+    name: "rag_next_step",
+    label: "➡️ RAG Next Step (N+1)",
+    description:
+      "Record what the NEXT step should be after the current work. " +
+      "Creates a N+1 todo that will be shown in future sessions for resumable workflows.",
+    parameters: {
+      type: "object",
+      properties: {
+        description: {
+          type: "string",
+          description: "What should happen next? Describe the next action clearly.",
+        },
+        priority: {
+          type: "number",
+          description: "Priority 0-5 (0=normal, 5=urgent)",
+          default: 0,
+        },
+      },
+      required: ["description"],
+    },
+    execute: async (_toolCallId, rawParams) => {
+      if (!dbReady()) {
+        return textResult("⚠ RAG database not available.");
+      }
+      const description = String(rawParams.description || "");
+      const priority = parseInt(rawParams.priority, 10) || 0;
+      const ns = addNextStep(description, priority, null);
+      if (ns) {
+        return textResult(`➡️ N+1 recorded: "${description}" (priority: ${priority})`);
+      }
+      return textResult("❌ Failed to save next step");
     },
   };
 }
@@ -430,6 +504,15 @@ function buildRagContextString(agentId) {
     }
   }
 
+  // N+1 next steps
+  const nextSteps = getPendingNextSteps(agentId, 5);
+  if (nextSteps.length > 0) {
+    parts.push(`\nN+1 next steps: ${nextSteps.length}`);
+    for (const ns of nextSteps) {
+      parts.push(`  - ${ns.description}`);
+    }
+  }
+
   return parts.length > 0 ? parts.join("\n") : null;
 }
 
@@ -459,6 +542,7 @@ export default definePluginEntry({
     api.registerTool(createRagNoteTool(api));
     api.registerTool(createRagStatusTool(api));
     api.registerTool(createRagCheckpointTool(api));
+    api.registerTool(createRagNextStepTool(api));
 
     // ── Before prompt build: inject RAG context + track turns ─────
 
@@ -478,7 +562,8 @@ export default definePluginEntry({
             contextStr +
             "\n\n" +
             "Use rag_search to search memory, rag_note to save knowledge, " +
-            "rag_checkpoint for workflow progress, and rag_status to check pending tasks.\n";
+            "rag_checkpoint for workflow progress, rag_next_step for N+1 tracking, " +
+            "and rag_status to check pending tasks.\n";
 
           return { prependContext: prefix };
         }

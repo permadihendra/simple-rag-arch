@@ -398,6 +398,54 @@ def get_checkpoints_for_task(task_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def add_next_step(session_id: int | None, description: str, priority: int = 0, agent_id: str | None = None) -> dict:
+    """Record a next-step action for an agent or session.
+    Returns the new next_step row."""
+    c = _conn()
+    cur = c.execute(
+        "INSERT INTO next_steps (session_id, description, priority, created_at) VALUES (?,?,?,?)",
+        (session_id, description, priority, now()),
+    )
+    c.commit()
+    row = dict(c.execute("SELECT * FROM next_steps WHERE id=?", (cur.lastrowid,)).fetchone())
+    c.close()
+    return row
+
+
+def get_pending_next_steps(agent_id: str | None = None, limit: int = 10) -> list[dict]:
+    """Get pending next steps, optionally filtered by agent.
+    Ordered by priority DESC then created_at ASC."""
+    c = _conn()
+    if agent_id:
+        rows = c.execute(
+            """SELECT ns.* FROM next_steps ns
+               LEFT JOIN sessions s ON ns.session_id = s.id
+               WHERE ns.status='pending' AND (s.agent_id=? OR ns.session_id IS NULL)
+               ORDER BY ns.priority DESC, ns.created_at ASC
+               LIMIT ?""",
+            (agent_id, limit),
+        ).fetchall()
+    else:
+        rows = c.execute(
+            """SELECT ns.* FROM next_steps ns
+               WHERE ns.status='pending'
+               ORDER BY ns.priority DESC, ns.created_at ASC
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    c.close()
+    return [dict(r) for r in rows]
+
+
+def complete_next_step(next_step_id: int) -> bool:
+    """Mark a next step as completed."""
+    c = _conn()
+    c.execute("UPDATE next_steps SET status='completed' WHERE id=?", (next_step_id,))
+    c.commit()
+    c.close()
+    return True
+
+
 # ── Notes + Tags CRUD ────────────────────────────────────────────────────────
 
 def add_note(agent_id: str, title: str, content: str,

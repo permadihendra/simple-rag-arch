@@ -304,10 +304,13 @@ Two swappable plugins bridge AI agents with the RAG memory system:
 **Tools provided to the LLM:**
 - `rag_search` — FTS5 full-text memory search
 - `rag_note` — Save knowledge with tags
-- `rag_status` — Check pending tasks & agents
+- `rag_status` — Check pending tasks, N+1 next steps & agents
 - `rag_checkpoint` — Save/resume workflows
+- `rag_next_step` — Record N+1 for resumable workflows
 - `rag_end_session` (Pi only) — End session with summary
 - `rag_configure` (Pi only) — Switch agent identity
+
+**Slash commands (Pi Code):** `/rag-search`, `/rag-status`, `/rag-note`, `/rag-end`, `/rag-checkpoint`, `/rag-next`, `/rag-config`
 
 **Toggle scripts:**
 - `scripts/toggle-pi-rag.sh [on|off|status]`

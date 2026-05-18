@@ -44,33 +44,28 @@ export interface RagTask {
   retry_count: number;
 }
 
-export interface RagStatus {
-  agent_id: string;
-  active_session: number | null;
-  pending_tasks: RagTask[];
+export interface RagNextStep {
+  id: number;
+  session_id: number | null;
+  description: string;
+  priority: number;
+  status: string;
+  created_at: string;
 }
 
-export interface RagSearchResult {
-  notes: RagNote[];
-  sessions: RagSession[];
-}
+// ── Helper: run Python against the RAG DB ───────────────────────────
 
-// ── Python helper runner ────────────────────────────────────────────
-
-function pyCode(code: string): string {
-  const script = `
-import sys, json
-sys.path.insert(0, ${JSON.stringify(path.join(RAG_DIR, "scripts"))})
-from db import ${code}
-`;
+function runPy(oneLiner: string): string | null {
   try {
-    return execSync(`${VENV_PYTHON} -c ${JSON.stringify(script)}`, {
-      encoding: "utf-8",
-      timeout: 10_000,
-    }).trim();
+    return execSync(
+      `${VENV_PYTHON} -c ${JSON.stringify(
+        `import sys, json; sys.path.insert(0, ${JSON.stringify(path.join(RAG_DIR, "scripts"))}); ${oneLiner}`
+      )}`,
+      { encoding: "utf-8", timeout: 10_000 }
+    ).trim();
   } catch (e: any) {
     console.error(`[rag-bridge] Python error: ${e.message}`);
-    return "[]";
+    return null;
   }
 }
 
@@ -81,192 +76,134 @@ export function dbExists(): boolean {
 }
 
 export function searchNotes(query: string, limit = 5): RagNote[] {
-  const code = `
-notes = search_notes(${JSON.stringify(query)}, ${limit})
-print(json.dumps([dict(n) for n in notes]))
-`;
-  try {
-    const raw = execSync(
-      `${VENV_PYTHON} -c ${JSON.stringify(
-        `import sys, json; sys.path.insert(0, ${JSON.stringify(path.join(RAG_DIR, "scripts"))}); from db import search_notes; notes = search_notes(${JSON.stringify(query)}, ${limit}); print(json.dumps([dict(n) for n in notes]))`
-      )}`,
-      {
-        encoding: "utf-8",
-        timeout: 10_000,
-      }
-    ).trim();
-    return JSON.parse(raw) as RagNote[];
-  } catch {
-    return [];
-  }
+  const raw = runPy(
+    `from db import search_notes; notes = search_notes(${JSON.stringify(query)}, ${limit}); print(json.dumps([dict(n) for n in notes]))`
+  );
+  if (!raw) return [];
+  try { return JSON.parse(raw) as RagNote[]; } catch { return []; }
 }
 
 export function searchSessions(query: string, limit = 5): RagSession[] {
-  try {
-    const raw = execSync(
-      `${VENV_PYTHON} -c ${JSON.stringify(
-        `import sys, json; sys.path.insert(0, ${JSON.stringify(path.join(RAG_DIR, "scripts"))}); from db import search_sessions; ss = search_sessions(${JSON.stringify(query)}, ${limit}); print(json.dumps([dict(s) for s in ss]))`
-      )}`,
-      {
-        encoding: "utf-8",
-        timeout: 10_000,
-      }
-    ).trim();
-    return JSON.parse(raw) as RagSession[];
-  } catch {
-    return [];
-  }
+  const raw = runPy(
+    `from db import search_sessions; ss = search_sessions(${JSON.stringify(query)}, ${limit}); print(json.dumps([dict(s) for s in ss]))`
+  );
+  if (!raw) return [];
+  try { return JSON.parse(raw) as RagSession[]; } catch { return []; }
 }
 
 export function addNote(
-  agentId: string,
-  title: string,
-  content: string,
-  tags: string[] = [],
-  importance = 1
+  agentId: string, title: string, content: string,
+  tags: string[] = [], importance = 1
 ): RagNote | null {
-  try {
-    const raw = execSync(
-      `${VENV_PYTHON} -c ${JSON.stringify(
-        `import sys, json; sys.path.insert(0, ${JSON.stringify(path.join(RAG_DIR, "scripts"))}); from db import add_note; n = add_note(${JSON.stringify(agentId)}, ${JSON.stringify(title)}, ${JSON.stringify(content)}, ${JSON.stringify(tags)}, ${importance}); print(json.dumps(dict(n)))`
-      )}`,
-      {
-        encoding: "utf-8",
-        timeout: 10_000,
-      }
-    ).trim();
-    return JSON.parse(raw) as RagNote;
-  } catch {
-    return null;
-  }
+  const raw = runPy(
+    `from db import add_note; n = add_note(${JSON.stringify(agentId)}, ${JSON.stringify(title)}, ${JSON.stringify(content)}, ${JSON.stringify(tags)}, ${importance}); print(json.dumps(dict(n)))`
+  );
+  if (!raw) return null;
+  try { return JSON.parse(raw) as RagNote; } catch { return null; }
 }
 
 export function startSession(agentId: string): number | null {
-  try {
-    const raw = execSync(
-      `${VENV_PYTHON} -c ${JSON.stringify(
-        `import sys, json; sys.path.insert(0, ${JSON.stringify(path.join(RAG_DIR, "scripts"))}); from db import start_session; sid = start_session(${JSON.stringify(agentId)}); print(sid)`
-      )}`,
-      {
-        encoding: "utf-8",
-        timeout: 10_000,
-      }
-    ).trim();
-    return parseInt(raw, 10);
-  } catch {
-    return null;
-  }
+  const raw = runPy(
+    `from db import start_session; sid = start_session(${JSON.stringify(agentId)}); print(sid)`
+  );
+  if (!raw) return null;
+  const n = parseInt(raw, 10);
+  return Number.isNaN(n) ? null : n;
 }
 
 export function endSession(
-  sessionId: number,
-  summary: string,
-  whatWorked: string[] = [],
-  whatFailed: string[] = [],
+  sessionId: number, summary: string,
+  whatWorked: string[] = [], whatFailed: string[] = [],
   tokenCount = 0
 ): boolean {
-  try {
-    execSync(
-      `${VENV_PYTHON} -c ${JSON.stringify(
-        `import sys, json; sys.path.insert(0, ${JSON.stringify(path.join(RAG_DIR, "scripts"))}); from db import end_session; end_session(${sessionId}, ${JSON.stringify(summary)}, ${JSON.stringify(whatWorked)}, ${JSON.stringify(whatFailed)}, token_count=${tokenCount}); print("ok")`
-      )}`,
-      {
-        encoding: "utf-8",
-        timeout: 10_000,
-      }
-    );
-    return true;
-  } catch {
-    return false;
-  }
+  const raw = runPy(
+    `from db import end_session; end_session(${sessionId}, ${JSON.stringify(summary)}, ${JSON.stringify(whatWorked)}, ${JSON.stringify(whatFailed)}, token_count=${tokenCount}); print("ok")`
+  );
+  return raw === "ok";
 }
 
 export function getPendingTasks(agentId: string): RagTask[] {
-  try {
-    const raw = execSync(
-      `${VENV_PYTHON} -c ${JSON.stringify(
-        `import sys, json; sys.path.insert(0, ${JSON.stringify(path.join(RAG_DIR, "scripts"))}); from db import get_pending_tasks; tasks = get_pending_tasks(${JSON.stringify(agentId)}); print(json.dumps([dict(t) for t in tasks]))`
-      )}`,
-      {
-        encoding: "utf-8",
-        timeout: 10_000,
-      }
-    ).trim();
-    return JSON.parse(raw) as RagTask[];
-  } catch {
-    return [];
-  }
+  const raw = runPy(
+    `from db import get_pending_tasks; tasks = get_pending_tasks(${JSON.stringify(agentId)}); print(json.dumps([dict(t) for t in tasks]))`
+  );
+  if (!raw) return [];
+  try { return JSON.parse(raw) as RagTask[]; } catch { return []; }
 }
 
 export function getAgent(agentId: string): Record<string, any> | null {
-  try {
-    const raw = execSync(
-      `${VENV_PYTHON} -c ${JSON.stringify(
-        `import sys, json; sys.path.insert(0, ${JSON.stringify(path.join(RAG_DIR, "scripts"))}); from db import get_agent; a = get_agent(${JSON.stringify(agentId)}); print(json.dumps(dict(a)) if a else "null")`
-      )}`,
-      {
-        encoding: "utf-8",
-        timeout: 10_000,
-      }
-    ).trim();
-    return raw === "null" ? null : JSON.parse(raw);
-  } catch {
-    return null;
-  }
+  const raw = runPy(
+    `from db import get_agent; a = get_agent(${JSON.stringify(agentId)}); print(json.dumps(dict(a)) if a else "null")`
+  );
+  if (!raw || raw === "null") return null;
+  try { return JSON.parse(raw); } catch { return null; }
 }
 
 export function listAgents(): Record<string, any>[] {
-  try {
-    const raw = execSync(
-      `${VENV_PYTHON} -c ${JSON.stringify(
-        `import sys, json; sys.path.insert(0, ${JSON.stringify(path.join(RAG_DIR, "scripts"))}); from db import list_agents; agents = list_agents(); print(json.dumps([dict(a) for a in agents]))`
-      )}`,
-      {
-        encoding: "utf-8",
-        timeout: 10_000,
-      }
-    ).trim();
-    return JSON.parse(raw) as Record<string, any>[];
-  } catch {
-    return [];
-  }
+  const raw = runPy(
+    `from db import list_agents; agents = list_agents(); print(json.dumps([dict(a) for a in agents]))`
+  );
+  if (!raw) return [];
+  try { return JSON.parse(raw) as Record<string, any>[]; } catch { return []; }
 }
 
 export function saveCheckpoint(
-  sessionId: number | null,
-  taskId: string,
-  step: number,
-  status = "running"
+  sessionId: number | null, taskId: string, step: number, status = "running"
 ): boolean {
-  try {
-    execSync(
-      `${VENV_PYTHON} -c ${JSON.stringify(
-        `import sys; sys.path.insert(0, ${JSON.stringify(path.join(RAG_DIR, "scripts"))}); from db import save_checkpoint; save_checkpoint(${sessionId}, ${JSON.stringify(taskId)}, ${step}, ${JSON.stringify(status)}); print("ok")`
-      )}`,
-      {
-        encoding: "utf-8",
-        timeout: 10_000,
-      }
-    );
-    return true;
-  } catch {
-    return false;
-  }
+  const raw = runPy(
+    `from db import save_checkpoint; save_checkpoint(${sessionId ?? "None"}, ${JSON.stringify(taskId)}, ${step}, ${JSON.stringify(status)}); print("ok")`
+  );
+  return raw === "ok";
 }
 
 export function buildRuntimePrompt(agentId: string, maxTokens = 6000): string | null {
-  try {
-    const raw = execSync(
-      `${VENV_PYTHON} -c ${JSON.stringify(
-        `import sys; sys.path.insert(0, ${JSON.stringify(path.join(RAG_DIR, "scripts"))}); from db import build_runtime_prompt; prompt = build_runtime_prompt(${JSON.stringify(agentId)}, ${maxTokens}); print(prompt)`
-      )}`,
-      {
-        encoding: "utf-8",
-        timeout: 10_000,
-      }
-    );
-    return raw;
-  } catch {
-    return null;
-  }
+  return runPy(
+    `from db import build_runtime_prompt; prompt = build_runtime_prompt(${JSON.stringify(agentId)}, ${maxTokens}); print(prompt)`
+  );
+}
+
+// ── N+1 Next Step Tracking ──────────────────────────────────────────
+
+export interface RagNextStep {
+  id: number;
+  session_id: number | null;
+  description: string;
+  priority: number;
+  status: string;
+  created_at: string;
+}
+
+/**
+ * Record a next-step action. Returns the new next_step row or null.
+ */
+export function addNextStep(
+  description: string,
+  priority = 0,
+  sessionId: number | null = null
+): RagNextStep | null {
+  const raw = runPy(
+    `from db import add_next_step; ns = add_next_step(${sessionId ?? "None"}, ${JSON.stringify(description)}, ${priority}); print(json.dumps(dict(ns)))`
+  );
+  if (!raw) return null;
+  try { return JSON.parse(raw) as RagNextStep; } catch { return null; }
+}
+
+/**
+ * Get pending next steps for an agent, ordered by priority then creation date.
+ */
+export function getPendingNextSteps(agentId: string, limit = 10): RagNextStep[] {
+  const raw = runPy(
+    `from db import get_pending_next_steps; steps = get_pending_next_steps(${JSON.stringify(agentId)}, ${limit}); print(json.dumps([dict(s) for s in steps]))`
+  );
+  if (!raw) return [];
+  try { return JSON.parse(raw) as RagNextStep[]; } catch { return []; }
+}
+
+/**
+ * Mark a next step as completed.
+ */
+export function completeNextStep(nextStepId: number): boolean {
+  const raw = runPy(
+    `from db import complete_next_step; complete_next_step(${nextStepId}); print("ok")`
+  );
+  return raw === "ok";
 }
