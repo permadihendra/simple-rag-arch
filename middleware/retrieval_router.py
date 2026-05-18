@@ -52,11 +52,27 @@ THRESHOLD_HIGH = 5
 THRESHOLD_MEDIUM = 3
 
 
+# Common stop words that don't indicate a meaningful match
+_STOP_WORDS = frozenset({
+    "a", "an", "the", "in", "on", "at", "to", "of", "is", "it",
+    "or", "and", "for", "by", "with", "as", "from", "be", "was",
+    "are", "were", "been", "being", "have", "has", "had", "do",
+    "does", "did", "but", "if", "so", "no", "not", "up", "out",
+})
+
+
 def _exact_keyword_match(query: str, text: str) -> bool:
-    """Check if any keyword from query appears in text."""
+    """Check if any meaningful keyword from query appears in text.
+    Filters out common stop words to avoid false positives.
+    """
     if not query or not text:
         return False
-    keywords = query.lower().split()
+    keywords = [
+        kw for kw in query.lower().split()
+        if len(kw) >= 3 and kw not in _STOP_WORDS
+    ]
+    if not keywords:
+        return False
     text_lower = text.lower()
     return any(kw in text_lower for kw in keywords)
 
@@ -341,19 +357,24 @@ if __name__ == "__main__":
 
     query = sys.argv[1] if len(sys.argv) > 1 else "login retry"
     agent_id = sys.argv[2] if len(sys.argv) > 2 else "pi-code"
+    json_only = "--json" in sys.argv or "-j" in sys.argv
 
     result = retrieve(query, agent_id)
-    print(f"\nQuery: {result['query']}")
-    print(f"Agent: {result['agent_id']}")
-    print(f"Confidence: {result['confidence_level']} (score: {result['top_score']})")
-    print(f"Sources checked: {', '.join(result['sources_checked'])}")
-    print(f"Results returned: {len(result['results'])} / {result['total_candidates']} candidates")
-    print(f"Needs external fallback: {result['needs_external_fallback']}")
-    print()
 
-    print(format_retrieval_context(result))
-    print()
+    if json_only:
+        print(json.dumps(result, default=str))
+    else:
+        print(f"\nQuery: {result['query']}")
+        print(f"Agent: {result['agent_id']}")
+        print(f"Confidence: {result['confidence_level']} (score: {result['top_score']})")
+        print(f"Sources checked: {', '.join(result['sources_checked'])}")
+        print(f"Results returned: {len(result['results'])} / {result['total_candidates']} candidates")
+        print(f"Needs external fallback: {result['needs_external_fallback']}")
+        print()
 
-    # JSON output for programmatic use
-    print("--- JSON ---")
-    print(json.dumps(result, indent=2, default=str))
+        print(format_retrieval_context(result))
+        print()
+
+        # JSON output for programmatic use
+        print("--- JSON ---")
+        print(json.dumps(result, indent=2, default=str))

@@ -38,6 +38,9 @@ from rich import box
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "scripts"))
 
+import sys as _sys
+_sys.path.insert(0, os.path.join(os.path.dirname(__file__), "middleware"))
+from retrieval_router import retrieve, format_retrieval_context
 from db import (
     register_agent, get_agent, list_agents, _conn,
     start_session, end_session, build_runtime_prompt, build_context,
@@ -124,6 +127,10 @@ def _pick_agent(agents: list[dict], platform: str | None = None) -> str:
 def _resolve_platform(p: str | None) -> str:
     if p:
         if p not in PLATFORMS:
+            # Check if it's an agent ID instead — allows "rag start linux-admin"
+            agent = get_agent(p)
+            if agent or p in AGENT_MAP:
+                return "openclaw"  # default platform when an agent is given directly
             console.print(f"[red]✗ Unknown platform: [bold]{p}[/]. Options: {', '.join(PLATFORMS)}[/]")
             raise typer.Exit(code=1)
         return p
@@ -242,6 +249,12 @@ def start(
     max_tokens: Annotated[int, typer.Option("--max-tokens", "-t", help="Context budget")] = 6000,
 ):
     """Start a new session — two-level platform → agent flow."""
+    # Smart arg parsing: if first arg isn't a platform but is an agent, swap
+    if platform and platform not in PLATFORMS and agent is None:
+        agent_candidate = platform
+        if get_agent(agent_candidate) or agent_candidate in AGENT_MAP:
+            agent = agent_candidate
+            platform = None
     plat = _resolve_platform(platform)
     aid = _resolve_agent(agent, plat)
 
@@ -300,6 +313,8 @@ def end(
     auto: Annotated[bool, typer.Option("--auto", "-a", help="Auto-summarize from daily memory")] = False,
     worked: Annotated[Optional[str], typer.Option("--worked", "-w", help="Comma-separated what worked")] = None,
     failed: Annotated[Optional[str], typer.Option("--failed", "-f", help="Comma-separated what failed")] = None,
+    interactive: Annotated[bool, typer.Option("--interactive", "-i", help="Prompt for summary interactively")] = False,
+    checkpoint: Annotated[bool, typer.Option("--checkpoint", "-c", help="Auto-create final checkpoint when ending")] = False,
 ):
     """End an active session with summary."""
     aid = _resolve_agent(agent)
@@ -309,7 +324,10 @@ def end(
         raise typer.Exit(code=1)
 
     if not summary and not auto:
-        summary = Prompt.ask("[bold]Session summary[/]", default="(completed)")
+        if interactive:
+            summary = Prompt.ask("[bold]Session summary[/]", default="(session ended)")
+        else:
+            summary = "(session ended)"
     elif auto:
         today = datetime.now().strftime("%Y-%m-%d")
         mf = MEMORY_DIR / f"{today}.md"
@@ -328,10 +346,26 @@ def end(
     wl = [x.strip() for x in worked.split(",")] if worked else []
     fl = [x.strip() for x in failed.split(",")] if failed else []
 
-    result = end_session(sid, summary=summary, what_worked=wl, what_failed=fl)
+    # Handle stale session markers gracefully
+    try:
+        result = end_session(sid, summary=summary, what_worked=wl, what_failed=fl)
+    except ValueError as e:
+        # Session ID from marker doesn't exist in DB — stale marker
+        console.print(f"[yellow]⚠ Stale session marker: {e}[/]")
+        console.print("[dim]Cleaning up and closing a placeholder session...[/]")
+        sp = BASE / "runtime" / f".active_session_{aid}"
+        if sp.exists(): sp.unlink()
+        nsid = start_session(aid)
+        result = end_session(nsid, summary=summary or "(stale session closed)", what_worked=wl, what_failed=fl)
+        sid = nsid
 
     sp = BASE / "runtime" / f".active_session_{aid}"
     if sp.exists(): sp.unlink()
+
+    # Auto-create final checkpoint if requested
+    if checkpoint:
+        save_checkpoint(sid, "session-end", 1, "success", {"summary": summary[:200]})
+        console.print(f"[dim]📍 Checkpoint created: session-end step 1 → success[/]")
 
     tbl = Table(title=f"✅ Session {result['id']} Ended", box=box.ROUNDED)
     tbl.add_column("Metric", style="cyan"); tbl.add_column("Value")
@@ -400,29 +434,61 @@ def context(
 
 @app.command()
 def search(
-    query: Annotated[str, typer.Argument(help="FTS5 search query")],
+    query: Annotated[str, typer.Argument(help="Search query")],
     limit: Annotated[int, typer.Option("--limit", "-l", help="Max results")] = 5,
+    agent: Annotated[Optional[str], typer.Option("--agent", "-a", help="Agent ID for namespace scoring")] = None,
+    json: Annotated[bool, typer.Option("--json", "-j", help="Output raw JSON")] = False,
 ):
-    """Search memory notes and sessions."""
-    console.print(f"[bold]🔍 Searching:[/] [cyan]{query}[/]\n")
-    notes = search_notes(query, limit)
-    if notes:
-        t = Table(title="📝 Notes", box=box.ROUNDED)
-        t.add_column("Title", style="bold"); t.add_column("Tags")
-        t.add_column("Snippet")
-        for n in notes:
-            tags = n.get("tags", "") or ""
-            snip = n["content"][:80] + "..." if len(n["content"]) > 80 else n["content"]
-            t.add_row(n["title"], f"[dim]{tags}[/]", snip)
+    """Search memory through the Retrieval Router with confidence scoring."""
+    aid = agent or "pi-code"
+    console.print(f"[bold]🔍 Searching:[/] [cyan]{query}[/] [dim]via Retrieval Router (agent: {aid})[/]\n")
+    result = retrieve(query, aid, limit)
+    if not result:
+        console.print("[red]✗ Retrieval Router error[/]")
+        return
+
+    if json:
+        import json as _json
+        console.print(_json.dumps(result, indent=2, default=str))
+        return
+
+    # Confidence summary
+    conf = result["confidence_level"]
+    conf_color = {"high": "green", "medium": "yellow", "low": "red"}.get(conf, "white")
+    console.print(Panel(
+        f"Confidence: [{conf_color}]{conf.upper()}[/{conf_color}] "
+        f"(score: {result['top_score']}) | "
+        f"Sources: {', '.join(result['sources_checked'])} | "
+        f"{len(result['results'])} / {result['total_candidates']} candidates",
+        border_style=conf_color,
+        title="🔍 Retrieval Router",
+    ))
+
+    if result["needs_external_fallback"]:
+        console.print("[yellow]⚠ Low confidence — consider external search fallback[/]")
+
+    if result["results"]:
+        t = Table(box=box.ROUNDED)
+        t.add_column("#", style="dim")
+        t.add_column("Source", style="cyan")
+        t.add_column("Confidence", style="bold")
+        t.add_column("Content")
+
+        for i, r in enumerate(result["results"], 1):
+            source_icon = {
+                "checkpoint": "🔧", "session": "📋", "session_fts": "📋", "note": "📝",
+            }.get(r.get("source", ""), "📄")
+            source_label = f"{source_icon} {r.get('source', '?').upper()}"
+
+            conf_val = r.get("confidence", 0)
+            conf_dot = "🟢" if conf_val >= 5 else "🟡" if conf_val >= 3 else "🔴"
+            conf_str = f"{conf_dot} {conf_val}"
+
+            content = (r.get("content", "") or "")[:80]
+            t.add_row(str(i), source_label, conf_str, content)
+
         console.print(t)
-    sessions = search_sessions(query, limit)
-    if sessions:
-        t2 = Table(title="💬 Sessions", box=box.ROUNDED)
-        t2.add_column("ID"); t2.add_column("Agent"); t2.add_column("Summary")
-        for s in sessions:
-            t2.add_row(str(s["id"]), s.get("agent_id", "?"), (s.get("summary") or "")[:80])
-        console.print(t2)
-    if not notes and not sessions:
+    else:
         console.print(f"[yellow]No results for '{query}'[/]")
 
 @app.command()

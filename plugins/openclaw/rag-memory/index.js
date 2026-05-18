@@ -194,6 +194,30 @@ function completeNextStep(nextStepId) {
   return raw === "ok";
 }
 
+// ── Retrieval Router Bridge ────────────────────────────────────────────
+
+const MIDDLEWARE_DIR = path.join(getRagDir(), "middleware");
+
+function retrieve(query, agentId, limit = 5) {
+  const raw = runPy(
+    `sys.path.insert(0, ${JSON.stringify(MIDDLEWARE_DIR)}); ` +
+    `from retrieval_router import retrieve; ` +
+    `result = retrieve(${JSON.stringify(query)}, ${JSON.stringify(agentId)}, ${limit}); ` +
+    `print(json.dumps(result, default=str))`
+  );
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+function formatRetrievalContext(routerResult) {
+  const raw = runPy(
+    `sys.path.insert(0, ${JSON.stringify(MIDDLEWARE_DIR)}); ` +
+    `from retrieval_router import format_retrieval_context; ` +
+    `print(format_retrieval_context(${JSON.stringify(routerResult)}))`
+  );
+  return raw;
+}
+
 // ── Tool definitions ─────────────────────────────────────────────────
 
 function createRagSearchTool(api) {
@@ -201,14 +225,16 @@ function createRagSearchTool(api) {
     name: "rag_search",
     label: "RAG Search",
     description:
-      "Search the RAG memory system for notes and session summaries. " +
-      "Use this when you need to recall past work, project context, or lessons learned.",
+      "Search the RAG memory system using the Retrieval Router with confidence scoring. " +
+      "Checks checkpoints, recent sessions, and FTS5 in priority order. " +
+      "Results include confidence level (HIGH/MEDIUM/LOW). " +
+      "When confidence is LOW, consider external search fallback.",
     parameters: {
       type: "object",
       properties: {
         query: {
           type: "string",
-          description: "Search query (FTS5 full-text search over notes and sessions)",
+          description: "Search query (full-text search across checkpoints, sessions, and notes)",
         },
         limit: {
           type: "number",
@@ -225,36 +251,40 @@ function createRagSearchTool(api) {
 
       const query = String(rawParams.query || "");
       const limit = parseInt(rawParams.limit, 10) || 5;
+      const agentId = (api.config && api.config.agentId) || "linux-admin";
 
-      const notes = searchNotes(query, limit);
-      const sessions = searchSessions(query, limit);
+      const result = retrieve(query, agentId, limit);
 
+      if (!result) {
+        return textResult(`❌ Retrieval Router error for "${query}".`);
+      }
+
+      // Use the router's formatted context if available
+      const formatted = formatRetrievalContext(result);
+
+      if (formatted) {
+        return textResult(formatted);
+      }
+
+      // Fallback: manual formatting
       const parts = [];
+      parts.push(`── Memory Retrieval (${(result.confidence_level || "?").toUpperCase()} confidence) ──`);
 
-      if (notes.length > 0) {
-        parts.push("## 📝 Notes");
-        for (const n of notes) {
-          const tags = n.tags ? ` [${n.tags}]` : "";
-          parts.push(
-            `- **${n.title}**${tags}\n  ${(n.content || "").slice(0, 200)}${n.content && n.content.length > 200 ? "..." : ""}`
-          );
+      if (result.needs_external_fallback) {
+        parts.push("⚠ Low confidence — consider external search fallback");
+      }
+
+      if (result.results && result.results.length > 0) {
+        for (const r of result.results) {
+          const src = (r.source || "?").toUpperCase();
+          const conf = r.confidence || 0;
+          parts.push(`\n- [${src}] confidence=${conf}: ${(r.content || "").slice(0, 200)}`);
         }
+      } else {
+        parts.push(`\nNo results found for "${query}".`);
       }
 
-      if (sessions.length > 0) {
-        parts.push("## 💬 Sessions");
-        for (const s of sessions) {
-          parts.push(
-            `- Session #${s.id} (${s.agent_id}): ${((s.summary) || "(no summary)").slice(0, 150)}`
-          );
-        }
-      }
-
-      if (parts.length === 0) {
-        return textResult(`No results found for "${query}".`);
-      }
-
-      return textResult(parts.join("\n\n"));
+      return textResult(parts.join("\n"));
     },
   };
 }

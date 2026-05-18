@@ -372,15 +372,19 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
     description:
       "Search the RAG memory system for notes and session summaries. " +
       "Call this BEFORE answering any question about past work, project history, " +
-      "lessons learned, or anything the user expects you to remember.",
+      "lessons learned, or anything the user expects you to remember.\n\n" +
+      "Uses the Retrieval Router with confidence scoring: checks active checkpoints, " +
+      "recent sessions, FTS5 search. Results include confidence level (HIGH/MEDIUM/LOW). " +
+      "When confidence is LOW, the agent should consider external search fallback.",
     promptSnippet: "Search RAG memory — call this BEFORE answering history questions",
     promptGuidelines: [
       "CRITICAL: Before answering questions about past work, project history, or things you should know — ALWAYS call rag_search first.",
       "rag_search is your memory. Use it instead of guessing about what happened before this session.",
+      "If the response says 'LOW confidence' or recommends external fallback, consider using web search if available.",
     ],
     parameters: Type.Object({
       query: Type.String({
-        description: "Search query (FTS5 full-text search over notes and sessions)",
+        description: "Search query (full-text search across checkpoints, sessions, and notes)",
       }),
       limit: Type.Optional(
         Type.Number({ description: "Max results (default: 5)", default: 5 })
@@ -394,40 +398,58 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
         };
       }
 
-      const notes = rag.searchNotes(params.query, params.limit ?? 5);
-      const sessions = rag.searchSessions(params.query, params.limit ?? 5);
+      const agentId = getAgentId();
+      const result = rag.retrieve(params.query, agentId, params.limit ?? 5);
 
-      const parts: string[] = [];
-
-      if (notes.length > 0) {
-        parts.push("## 📝 Notes");
-        for (const n of notes) {
-          const tags = n.tags ? `[${n.tags}]` : "";
-          parts.push(
-            `- **${n.title}** ${tags}\n  ${n.content.slice(0, 200)}${n.content.length > 200 ? "..." : ""}`
-          );
-        }
-      }
-
-      if (sessions.length > 0) {
-        parts.push("## 💬 Sessions");
-        for (const s of sessions) {
-          parts.push(
-            `- Session #${s.id} (${s.agent_id}): ${(s.summary || "(no summary)").slice(0, 150)}`
-          );
-        }
-      }
-
-      if (parts.length === 0) {
+      if (!result) {
         return {
-          content: [{ type: "text", text: `No RAG results found for "${params.query}".` }],
+          content: [{ type: "text", text: `❌ Retrieval Router error for "${params.query}".` }],
           details: {},
+          isError: true,
         };
       }
 
+      // Use the router's formatted context
+      const formatted = rag.formatRetrievalContext(result);
+
+      if (formatted) {
+        return {
+          content: [{ type: "text", text: formatted }],
+          details: {
+            confidenceLevel: result.confidence_level,
+            topScore: result.top_score,
+            needsExternalFallback: result.needs_external_fallback,
+            resultCount: result.results?.length ?? 0,
+            sourcesChecked: result.sources_checked,
+          },
+        };
+      }
+
+      // Fallback: manual formatting
+      const parts: string[] = [];
+      parts.push(`── Memory Retrieval (${result.confidence_level?.toUpperCase() ?? "?"} confidence) ──`);
+
+      if (result.needs_external_fallback) {
+        parts.push("⚠ Low confidence in local results — consider external search fallback");
+      }
+
+      if (result.results && result.results.length > 0) {
+        for (const r of result.results) {
+          const src = (r.source ?? "?").toUpperCase();
+          const conf = r.confidence ?? 0;
+          parts.push(`\n- [${src}] confidence=${conf}: ${(r.content ?? "").slice(0, 200)}`);
+        }
+      } else {
+        parts.push(`\nNo results found for "${params.query}".`);
+      }
+
       return {
-        content: [{ type: "text", text: parts.join("\n\n") }],
-        details: { noteCount: notes.length, sessionCount: sessions.length },
+        content: [{ type: "text", text: parts.join("\n") }],
+        details: {
+          confidenceLevel: result.confidence_level,
+          topScore: result.top_score,
+          needsExternalFallback: result.needs_external_fallback,
+        },
       };
     },
   });

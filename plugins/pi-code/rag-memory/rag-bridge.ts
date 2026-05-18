@@ -207,6 +207,34 @@ export function getPendingNextSteps(agentId: string, limit = 10): RagNextStep[] 
 }
 
 /**
+ * Retrieve memory through the Retrieval Router with confidence scoring.
+ * Calls middleware/retrieval_router.py retrieve() for the full priority chain
+ * (checkpoints → sessions → FTS5) with confidence scoring.
+ */
+export function retrieve(query: string, agentId: string, limit = 5): Record<string, any> | null {
+  const raw = runPy(
+    `sys.path.insert(0, ${JSON.stringify(path.join(RAG_DIR, "middleware"))}); ` +
+    `from retrieval_router import retrieve; ` +
+    `result = retrieve(${JSON.stringify(query)}, ${JSON.stringify(agentId)}, ${limit}); ` +
+    `print(json.dumps(result, default=str))`
+  );
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+/**
+ * Format router result into a readable prompt context block.
+ */
+export function formatRetrievalContext(routerResult: Record<string, any>): string | null {
+  const raw = runPy(
+    `sys.path.insert(0, ${JSON.stringify(path.join(RAG_DIR, "middleware"))}); ` +
+    `from retrieval_router import format_retrieval_context; ` +
+    `print(format_retrieval_context(${JSON.stringify(routerResult)}))`
+  );
+  return raw;
+}
+
+/**
  * Mark a next step as completed.
  */
 export function completeNextStep(nextStepId: number): boolean {
