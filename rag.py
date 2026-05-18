@@ -281,8 +281,12 @@ def end(
 
     if auto or worked or failed:
         for w in w_list[:3]:
+            if w.lower() in ('', 'none', 'n/a', '-'):
+                continue
             add_note(agent_id, f"✅ {w[:60]}", w, ["session-auto"], 1)
         for f_item in f_list[:3]:
+            if f_item.lower() in ('', 'none', 'n/a', '-'):
+                continue
             add_note(agent_id, f"⚠️ {f_item[:60]}", f_item, ["session-auto", "blocker"], 3)
 
 

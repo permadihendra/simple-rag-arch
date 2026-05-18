@@ -137,9 +137,13 @@ def cmd_end(agent_id: str, summary: str = "", worked: list = None,
     # Also add key events as notes
     if worked:
         for w in worked[:3]:
-            add_note(agent_id, f"Sve: {w[:60]}", w, ["session-auto"], 1)
+            if w.lower() in ('', 'none', 'n/a', '-'):
+                continue
+            add_note(agent_id, f"✅ {w[:60]}", w, ["session-auto"], 1)
     if failed:
         for f_item in failed[:3]:
+            if f_item.lower() in ('', 'none', 'n/a', '-'):
+                continue
             add_note(agent_id, f"⚠ Blocker: {f_item[:60]}", f_item, ["session-auto", "blocker"], 3)
 
     return result
