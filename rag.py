@@ -165,13 +165,35 @@ def _render_panel(title: str, content: str, style: str = "green") -> Panel:
 
 # ── Commands ─────────────────────────────────────────────────────────────────
 
-@app.callback(invoke_without_command=True)
-def default(ctx: typer.Context):
-    if ctx.invoked_subcommand is None:
-        ctx.invoke(start, platform=None, agent=None)
+def _show_menu():
+    """Interactive menu when rag is called without arguments."""
+    console.print("\n[bold]🦞 agent memory system[/]")
+    console.print("  [cyan]1.[/] 🚀 Start session")
+    console.print("  [cyan]2.[/] 📋 List agents")
+    console.print("  [cyan]3.[/] 🔍 Search memory")
+    console.print("  [cyan]4.[/] 📖 Index daily memory")
+    console.print("  [cyan]5.[/] 📝 Add note")
+    console.print("  [cyan]q.[/]  Quit")
+    choice = Prompt.ask("Choice", default="1")
+    if choice == "1":
+        start()
+    elif choice == "2":
+        list_cmd()
+    elif choice == "3":
+        q = Prompt.ask("Search query")
+        search(q)
+    elif choice == "4":
+        daily()
+    elif choice == "5":
+        add_note_cmd()
 
-@app.command()
-def list(
+@app.callback()
+def main_callback():
+    """🦞 Minimal Agent Memory System"""
+    pass
+
+@app.command(name="list")
+def list_cmd(
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show full details")] = False,
 ):
     """List all agents grouped by platform."""
@@ -453,4 +475,7 @@ def checkpoint(
 # ── Entry ────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    app()
+    if len(sys.argv) < 2:
+        _show_menu()
+    else:
+        app()
