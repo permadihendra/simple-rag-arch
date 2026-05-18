@@ -23,6 +23,7 @@ Examples:
 import sys
 import os
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Annotated
@@ -276,17 +277,21 @@ def start(
     if pending:
         console.print(f"[yellow]⚠ {len(pending)} pending task(s) — check [bold]rag status {aid}[/][/]")
 
-    # ── Show launch command ──
+    # ── Launch tool in current terminal ──
     rt_path = BASE / 'runtime' / 'runtime_prompt.md'
+    console.print(f"\n[bold]🚀 Launching {plat_label} for {name}...[/]")
+    console.print(f"[dim]Context: {rt_path}[/]\n")
 
-    if plat == 'openclaw':
-        console.print(f"\n[bold]→ Next:[/] Run [bold]openclaw[/] in this terminal")
-        console.print(f"  [dim]Context: {rt_path}[/]")
-    elif plat == 'pi-code':
-        cmd = f'pi --append-system-prompt {rt_path}'
-        console.print(f"\n[bold]→ Next:[/] Run [bold]{cmd}[/] in this terminal")
-    else:
-        console.print(f"  [dim]Context ready at: {rt_path}. Launch the platform manually.[/]")
+    # Small delay so user can read the output before the TUI takes over
+    time.sleep(0.5)
+
+    try:
+        if plat == 'openclaw':
+            os.execvp("openclaw", ["openclaw"])
+        elif plat == 'pi-code':
+            os.execvp("pi", ["pi", "--append-system-prompt", str(rt_path)])
+    except FileNotFoundError:
+        console.print(f"[red]✗ Command not found. Is it installed and in PATH?[/]")
 
 @app.command()
 def end(
