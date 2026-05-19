@@ -24,6 +24,8 @@ import sys
 import os
 import json
 import time
+import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Annotated
@@ -71,6 +73,36 @@ AGENT_MAP: dict[str, tuple[str, str, str]] = {
 }
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _sync_openclaw_plugin() -> None:
+    """Sync the latest RAG plugin files to OpenClaw's extensions directory."""
+    src = BASE / "plugins" / "openclaw" / "rag-memory"
+    dst = Path.home() / ".openclaw" / "extensions" / "rag-memory"
+
+    if not src.exists():
+        console.print(f"[yellow]⚠ Plugin source not found: {src}[/]")
+        return
+
+    dst.mkdir(parents=True, exist_ok=True)
+    synced = 0
+    for fname in ["index.js", "openclaw.plugin.json", "README.md"]:
+        sf = src / fname
+        df = dst / fname
+        if sf.exists():
+            shutil.copy2(str(sf), str(df))
+            synced += 1
+
+    console.print(f"[dim]✓ RAG plugin: {synced} file(s) synced to {dst}[/]")
+
+    # Ensure plugin is enabled (idempotent)
+    try:
+        subprocess.run(
+            ["openclaw", "plugins", "enable", "rag-memory"],
+            capture_output=True, timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
 
 def _agents_by_platform(platform: str | None = None) -> list[dict]:
     c = _conn()
@@ -311,6 +343,7 @@ def start(
 
     try:
         if plat == 'openclaw':
+            _sync_openclaw_plugin()
             os.execvp("openclaw", ["openclaw"])
         elif plat == 'pi-code':
             os.execvp("pi", ["pi", "--append-system-prompt", str(rt_path)])
