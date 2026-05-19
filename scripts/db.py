@@ -246,35 +246,192 @@ def reset_db() -> None:
 
 # ── Agent CRUD ───────────────────────────────────────────────────────────────
 
-def register_agent(agent_id: str, name: str, persona_file: str) -> dict:
+def register_agent(agent_id: str, name: str, persona_file: str, platform: str | None = None) -> dict:
     """Insert or update an agent record. Returns the row."""
     c = _conn()
-    c.execute(
-        """INSERT INTO agents (id, name, persona_file, status, created_at)
-           VALUES (?, ?, ?, 'active', ?)
-           ON CONFLICT(id) DO UPDATE SET name=excluded.name, persona_file=excluded.persona_file""",
-        (agent_id, name, persona_file, now()),
-    )
+    existing = c.execute("SELECT * FROM agents WHERE id=?", (agent_id,)).fetchone()
+
+    if existing:
+        # Update name/persona/platform if provided
+        new_name = name or existing["name"]
+        new_file = persona_file or existing["persona_file"]
+        new_platform = platform or existing.get("platform", "openclaw")
+        c.execute(
+            """UPDATE agents SET name=?, persona_file=?, platform=?, status='active' WHERE id=?""",
+            (new_name, new_file, new_platform, agent_id),
+        )
+    else:
+        c.execute(
+            """INSERT INTO agents (id, name, persona_file, platform, status, created_at)
+               VALUES (?, ?, ?, ?, 'active', ?)""",
+            (agent_id, name or agent_id, persona_file or f"agents/{agent_id}.md", platform or "openclaw", now()),
+        )
     c.commit()
     row = c.execute("SELECT * FROM agents WHERE id=?", (agent_id,)).fetchone()
     c.close()
     return dict(row)
 
 
-def get_agent(agent_id: str) -> dict | None:
-    """Get agent record by id."""
+def get_agent(agent_id: str, auto_register: bool = True) -> dict | None:
+    """Get agent record by id.
+
+    If auto_register is True (default) and the agent is not in the DB but a
+    matching persona file exists in agents/{agent_id}.md, it will be
+    automatically registered. This enables lazy registration on first use.
+    """
     c = _conn()
     row = c.execute("SELECT * FROM agents WHERE id=?", (agent_id,)).fetchone()
     c.close()
-    return dict(row) if row else None
+
+    if row:
+        return dict(row)
+
+    if auto_register:
+        # Try lazy auto-registration from agents/ directory
+        # First, check if any file defines this agent_id in its metadata
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        agents_dir = os.path.join(base_dir, "agents")
+        if os.path.isdir(agents_dir):
+            for fname in sorted(os.listdir(agents_dir)):
+                if not fname.endswith(".md"):
+                    continue
+                persona_path = os.path.join(agents_dir, fname)
+                meta = _parse_persona_metadata(persona_path)
+                if meta.get("id") == agent_id:
+                    name = meta.get("name") or _derive_agent_name(agent_id, persona_path)
+                    platform = meta.get("platform") or _detect_platform(agent_id, persona_path)
+                    return register_agent(agent_id, name, f"agents/{fname}", platform=platform)
+
+            # Fallback: try agent_id.md filename directly
+            persona_path = os.path.join(agents_dir, f"{agent_id}.md")
+            if os.path.exists(persona_path):
+                name = _derive_agent_name(agent_id, persona_path)
+                return register_agent(agent_id, name, f"agents/{agent_id}.md")
+
+    return None
 
 
-def list_agents() -> list[dict]:
-    """List all active agents."""
+def _derive_agent_name(agent_id: str, persona_path: str) -> str:
+    """Derive a human-readable agent name from the persona file."""
+    try:
+        with open(persona_path) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("- **ID**:") or line.startswith("- **Name**:"):
+                    parts = line.split(":", 1)
+                    if len(parts) > 1:
+                        name = parts[1].strip().strip("*").strip()
+                        if name:
+                            return name
+    except (FileNotFoundError, IOError):
+        pass
+    # Fallback: capitalise the agent_id
+    return agent_id.replace("-", " ").title()
+
+
+def list_agents(include_inactive: bool = False) -> list[dict]:
+    """List all agents, optionally including inactive ones."""
     c = _conn()
-    rows = c.execute("SELECT * FROM agents WHERE status='active'").fetchall()
+    if include_inactive:
+        rows = c.execute("SELECT * FROM agents ORDER BY created_at").fetchall()
+    else:
+        rows = c.execute("SELECT * FROM agents WHERE status='active'").fetchall()
     c.close()
     return [dict(r) for r in rows]
+
+
+def _parse_persona_metadata(persona_path: str) -> dict:
+    """Parse common metadata fields from a persona markdown file.
+
+    Looks for lines like:
+      - **ID**: agent-id
+      - **Name**: Agent Name
+      - **Platform**: pi-code
+
+    Returns a dict with keys: id, name, platform (all optional).
+    """
+    meta = {}
+    try:
+        with open(persona_path) as f:
+            for line in f:
+                stripped = line.strip()
+                # Match: - **KEY**: VALUE
+                if stripped.startswith("- **") and "**:" in stripped:
+                    _, rest = stripped.split("**:", 1)
+                    key_part = stripped[4:].split("**", 1)[0].strip().lower()
+                    value = rest.strip().lstrip("*").strip()
+
+                    if key_part in ("id",):
+                        meta["id"] = value
+                    elif key_part in ("name",):
+                        meta["name"] = value
+                    elif key_part in ("platform",):
+                        meta["platform"] = value.lower()
+    except (FileNotFoundError, IOError):
+        pass
+    return meta
+
+
+def auto_register_agents() -> list[dict]:
+    """
+    Scan the agents/ directory for .md persona files and register any
+    that aren't yet in the database. This enables auto-discovery of
+    new agent personas created by the user.
+
+    The agent ID is read from the `- **ID**:` metadata in the markdown file,
+    NOT from the filename. This means filenames can be descriptive
+    (e.g. `edgy_agent.md`) while the actual ID is meaningful (e.g. `linux-admin`).
+
+    Returns a list of newly registered agents.
+    """
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    agents_dir = os.path.join(base_dir, "agents")
+
+    if not os.path.isdir(agents_dir):
+        return []
+
+    # Get existing agent IDs from DB
+    existing = set(a["id"] for a in list_agents(include_inactive=True))
+
+    newly_registered = []
+    for fname in sorted(os.listdir(agents_dir)):
+        if not fname.endswith(".md"):
+            continue
+
+        persona_path = os.path.join(agents_dir, fname)
+
+        # Parse metadata from the file
+        meta = _parse_persona_metadata(persona_path)
+
+        # Agent ID comes from the file's - **ID**: field, NOT the filename
+        agent_id = meta.get("id")
+        if not agent_id:
+            # Fallback: use filename without .md
+            agent_id = fname[:-3]
+
+        if agent_id in existing:
+            continue
+
+        name = meta.get("name") or _derive_agent_name(agent_id, persona_path)
+        platform = meta.get("platform") or _detect_platform(agent_id, persona_path)
+
+        agent = register_agent(agent_id, name, f"agents/{fname}", platform=platform)
+        newly_registered.append(agent)
+        print(f"[db] Auto-registered agent: {name} ({agent_id}) from {fname}")
+
+    return newly_registered
+
+
+def _detect_platform(agent_id: str, persona_path: str) -> str:
+    """Heuristic: detect which platform an agent belongs to."""
+    try:
+        with open(persona_path) as f:
+            content = f.read()
+        if "pi-code" in content.lower() or "pi.dev" in content.lower() or "pi agent" in content.lower():
+            return "pi-code"
+    except (FileNotFoundError, IOError):
+        pass
+    return "openclaw"
 
 
 # ── Session CRUD ─────────────────────────────────────────────────────────────
@@ -657,7 +814,12 @@ def build_context(agent_id: str, max_tokens: int = 6000) -> dict:
       - pending:    unfinished checkpoints
       - notes:      top recent notes
       - token_budget_burned: estimated tokens in context
+
+    Auto-registers agents from agents/ directory if needed.
     """
+    # Always sync agents/ directory → DB on context build
+    auto_register_agents()
+
     agent = get_agent(agent_id)
     if not agent:
         raise ValueError(f"Agent '{agent_id}' not found in DB. Register first.")

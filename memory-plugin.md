@@ -68,11 +68,66 @@ Both plugins call the same Python backend (`scripts/db.py`) via `child_process`,
 | `/rag-next <description> [priority]` | Set N+1 next step |
 | `/rag-config <agentId>` | Switch agent identity |
 
+## Agent Auto-Registration 🆕
+
+Both plugins automatically discover and register new agents when a persona
+file is created in `agents/`.
+
+**How it works:**
+
+1. You create a new `.md` persona file in `~/simple-rag-arch/agents/`
+2. On next session start, the plugin scans the `agents/` directory
+3. Any file with a unique `- **ID**:` metadata field gets registered in the
+   SQLite `agents` table
+4. The agent becomes available via `rag_configure` and appears in `rag_status`
+
+**The agent ID comes from the file's `- **ID**:` metadata field**, NOT the
+filename. This means filenames can be descriptive (e.g. `edgy_agent.md`)
+while IDs stay meaningful (e.g. `linux-admin`).
+
+**Trigger points for auto-discovery:**
+| Platform | When it runs |
+|----------|-------------|
+| **Pi Code** | `session_start`, `rag_configure` tool, `build_context()` |
+| **OpenClaw** | `register()` (plugin load), `rag_configure` tool |
+| **CLI** | `python start_agent.py --register` |
+
+**Lazy registration:** If an agent isn't in the DB but a matching persona
+file exists, `get_agent()` auto-registers it on first lookup. This means
+`rag_configure` to any agent ID with a persona file Just Works™.
+
+### Example: Create a new agent
+
+```bash
+# 1. Create the persona file
+cat > ~/simple-rag-arch/agents/my-assistant.md << 'EOF'
+# My Assistant
+
+- **ID**: my-assistant
+- **Name**: My Assistant
+- **Platform**: pi-code
+
+## Traits
+- helpful, concise, proactive
+
+## Responsibilities
+- general assistance, research, automation
+EOF
+
+# 2. (Automatic) Next session auto-registers it.
+#    Or force it now:
+python ~/simple-rag-arch/scripts/start_agent.py my-assistant --register
+
+# 3. Switch to it (Pi Code):
+#    Use /rag-config my-assistant
+#    Or call the rag_configure tool
+```
+
 ### Auto-behaviors
 
 | Behavior | Pi Code | OpenClaw |
 |----------|---------|----------|
-| Load RAG context on session start | ✅ session_start | ❌ |
+| Auto-register agents on startup | ✅ session_start | ✅ register() |
 | Inject context before each turn | ✅ before_agent_start | ✅ before_prompt_build |
 | Auto-save session on end | ✅ agent_end / tools | ✅ session_end |
 | Auto-save what_worked/failed as notes | ✅ | ❌ |

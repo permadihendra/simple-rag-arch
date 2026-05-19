@@ -2,7 +2,7 @@
 """
 start_agent.py — Start a new agent session.
 
-1. Register agent if needed
+1. Auto-register agent from agents/ directory if needed
 2. Start session
 3. Build runtime prompt
 4. Write runtime prompt to runtime/runtime_prompt.md
@@ -15,7 +15,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from db import register_agent, start_session, build_runtime_prompt, now
+from db import auto_register_agents, register_agent, start_session, build_runtime_prompt, get_agent
 
 if __name__ == "__main__":
     args = sys.argv[1:]
@@ -31,17 +31,18 @@ if __name__ == "__main__":
         idx = args.index("--max-tokens")
         max_tokens = int(args[idx + 1])
 
-    # Map agent IDs to known personas
-    persona_map = {
-        "ops": ("ops", "Ops Agent", "agents/ops_agent.md"),
-        "coder": ("coder", "Coder Agent", "agents/coder_agent.md"),
-        "research": ("research", "Research Agent", "agents/research_agent.md"),
-    }
+    # Auto-discover agents from agents/ directory (no hardcoded map needed)
+    newly_registered = auto_register_agents()
 
-    if do_register and agent_id in persona_map:
-        aid, name, pfile = persona_map[agent_id]
-        register_agent(aid, name, pfile)
-        print(f"[start] Registered agent: {name} ({aid})")
+    if do_register:
+        # Ensure this specific agent is registered (lazy auto-register handles it)
+        agent = get_agent(agent_id)
+        if agent:
+            print(f"[start] Agent already registered: {agent['name']} ({agent_id})")
+        else:
+            print(f"[start] No persona file found for '{agent_id}' — registering with defaults")
+            agent = register_agent(agent_id, agent_id.replace("-", " ").title(), f"agents/{agent_id}.md")
+            print(f"[start] Registered agent: {agent['name']} ({agent_id})")
 
     # Start session
     session_id = start_session(agent_id)

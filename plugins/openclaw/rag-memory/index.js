@@ -156,6 +156,15 @@ function listAgents() {
   }
 }
 
+function autoRegisterAgents() {
+  const raw = runPy(
+    `from db import auto_register_agents; new_agents = auto_register_agents(); print(len(new_agents))`
+  );
+  if (!raw) return 0;
+  const n = parseInt(raw, 10);
+  return Number.isNaN(n) ? 0 : n;
+}
+
 function saveCheckpoint(sessionId, taskId, step, status = "running") {
   const raw = runPy(
     `from db import save_checkpoint; save_checkpoint(${sessionId ?? "None"}, ${JSON.stringify(taskId)}, ${step}, ${JSON.stringify(status)}); print("ok")`
@@ -573,6 +582,12 @@ export default definePluginEntry({
 
     if (dbReady()) {
       api.logger?.info?.("[rag-memory] RAG database found at " + getDbPath());
+
+      // Auto-discover any new agent persona files in agents/ directory
+      const newCount = autoRegisterAgents();
+      if (newCount > 0) {
+        api.logger?.info?.("[rag-memory] " + newCount + " new agent(s) auto-registered from agents/");
+      }
     } else {
       api.logger?.warn?.("[rag-memory] RAG database not found at " + getDbPath());
     }
@@ -584,6 +599,46 @@ export default definePluginEntry({
     api.registerTool(createRagStatusTool(api));
     api.registerTool(createRagCheckpointTool(api));
     api.registerTool(createRagNextStepTool(api));
+
+    // ── Add rag_configure tool (switch agent identity) ───────────────
+
+    api.registerTool({
+      name: "rag_configure",
+      label: "RAG Configure",
+      description:
+        "Switch the RAG agent identity to any agent with a persona file in agents/. " +
+        "Auto-registers new agents on the fly.",
+      parameters: {
+        type: "object",
+        properties: {
+          agentId: {
+            type: "string",
+            description: "Agent ID (e.g. linux-admin, pi-code, ops, coder, research)",
+          },
+        },
+        required: ["agentId"],
+      },
+      execute: async (_toolCallId, rawParams) => {
+        if (!dbReady()) {
+          return textResult("⚠ RAG database not available.");
+        }
+        const newAgentId = String(rawParams.agentId || "");
+        if (!newAgentId) {
+          return textResult("⚠ Please provide an agentId.");
+        }
+
+        // Auto-register if a new persona file exists
+        autoRegisterAgents();
+
+        // Update config
+        if (api.config) {
+          const oldId = api.config.agentId || "?";
+          api.config.agentId = newAgentId;
+          return textResult(`✅ Switched RAG agent from "${oldId}" to "${newAgentId}"`);
+        }
+        return textResult(`✅ RAG agent set to "${newAgentId}"`);
+      },
+    });
 
     // ── Before prompt build: inject RAG context + track turns ─────
 

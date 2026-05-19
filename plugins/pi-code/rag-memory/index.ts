@@ -177,7 +177,7 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
   //  EVENTS
   // ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ─
 
-  // ── Session start: restore + notify ───────────────────────────────
+  // ── Session start: auto-register agents + restore + notify ─────────
 
   pi.on("session_start", async (_event, ctx) => {
     restoreState(ctx);
@@ -185,6 +185,12 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
     if (!dbReady) {
       ctx.ui.notify("⚠ RAG DB not found at ~/simple-rag-arch/memory/memory.db", "warning");
       return;
+    }
+
+    // Auto-discover any new agent persona files in agents/ directory
+    const newCount = rag.autoRegisterAgents();
+    if (newCount > 0) {
+      ctx.ui.notify(`🆕 ${newCount} new agent(s) auto-registered from agents/`, "info");
     }
 
     const agentId = getAgentId();
@@ -786,14 +792,19 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "rag_configure",
     label: "⚙️ RAG Configure",
-    description: "Switch the RAG agent identity (pi-code, linux-admin, main, ops, coder, research).",
+    description: "Switch the RAG agent identity (pi-code, linux-admin, main, ops, coder, research, or any agent ID with a persona file in agents/).",
     promptSnippet: "Switch RAG agent identity",
     parameters: Type.Object({
       agentId: Type.String({
-        description: "Agent ID: pi-code, linux-admin, main, ops, coder, research",
+        description: "Agent ID (e.g. pi-code, linux-admin, ops, coder, research, or any agent with a persona file in agents/)",
       }),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+      // Auto-register if a new persona file exists for this agent
+      if (dbReady) {
+        rag.autoRegisterAgents();
+      }
+
       const oldId = getAgentId();
       setAgentId(params.agentId);
 

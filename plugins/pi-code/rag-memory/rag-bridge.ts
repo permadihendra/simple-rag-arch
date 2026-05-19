@@ -248,3 +248,19 @@ export function completeNextStep(nextStepId: number): boolean {
   );
   return raw === "ok";
 }
+
+/**
+ * Auto-register agents from the agents/ directory.
+ * Scans for .md persona files not yet in the DB and registers them.
+ * Returns the count of newly registered agents.
+ */
+export function autoRegisterAgents(): number {
+  const raw = runPy(`
+from db import auto_register_agents
+new_agents = auto_register_agents()
+print(len(new_agents))
+`);
+  if (!raw) return 0;
+  const n = parseInt(raw, 10);
+  return Number.isNaN(n) ? 0 : n;
+}
