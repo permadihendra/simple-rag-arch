@@ -87,12 +87,53 @@ def test_list_verbose():
           f"stdout={stdout[:200]!r}")
 
 
+# ── Test 3: rag status <agent> ───────────────────────────────────────
+
+def test_status_agent():
+    """rag status <agent> — show status for specific agent"""
+    result = run_rag("status", "linux-admin")
+    stdout = result.stdout
+
+    check("exit code 0", result.returncode == 0,
+          f"got code {result.returncode}")
+
+    check("shows agent name", "Edgy" in stdout or "linux-admin" in stdout,
+          f"stdout={stdout[:200]!r}")
+
+    check("shows session status", "session" in stdout.lower(),
+          f"missing session status")
+
+    check("shows pending tasks section", "pending" in stdout.lower() or "No pending" in stdout,
+          f"missing task status")
+
+
+# ── Test 4: rag status (all agents) ─────────────────────────────────
+
+def test_status_all():
+    """rag status — show status for all agents"""
+    result = run_rag("status")
+    stdout = result.stdout
+
+    check("exit code 0", result.returncode == 0,
+          f"got code {result.returncode}")
+
+    # Should list at least 2 agents
+    agent_count = sum(1 for a in ("pi-code", "linux-admin", "edge-tester") if a in stdout)
+    check(f"shows at least 2 agents", agent_count >= 2,
+          f"found {agent_count} agents in output")
+
+    check("shows pending tasks where applicable", "Task" in stdout or "No pending" in stdout,
+          f"missing task status")
+
+
 # ── Main ─────────────────────────────────────────────────────────────
 
 def run_all():
     tests = [
         ("rag list", test_list),
         ("rag list --verbose", test_list_verbose),
+        ("rag status <agent>", test_status_agent),
+        ("rag status (all)", test_status_all),
     ]
 
     # Allow running a single test by name
