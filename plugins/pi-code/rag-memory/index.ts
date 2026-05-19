@@ -200,6 +200,32 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
     }
 
     if (state.sessionId === null) {
+      // Try to reuse rag.py's session from the active session marker
+      const markerPath = path.join(
+        process.env.HOME || "~",
+        "simple-rag-arch",
+        "runtime",
+        `.active_session_${agentId}`
+      );
+      try {
+        const markerContent = fs.readFileSync(markerPath, "utf-8").trim();
+        const parsed = parseInt(markerContent, 10);
+        if (!isNaN(parsed) && rag.getSession(parsed)) {
+          state.sessionId = parsed;
+          state.startedAt = new Date().toISOString();
+          state.turnCount = 0;
+          state.whatWorked = [];
+          state.whatFailed = [];
+          state.pendingMemoryHints = [];
+          state.lastTurnHadNoteCall = false;
+          state.sessionNoteCount = 0;
+          state.sessionCheckpointCount = 0;
+          return;
+        }
+      } catch {
+        // Marker not found or invalid — fall through to start new session
+      }
+
       startRagSession(agentId);
     }
   });

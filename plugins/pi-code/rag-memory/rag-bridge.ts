@@ -154,6 +154,17 @@ export function getRecentSessions(agentId: string, limit = 3): RagSession[] {
   try { return JSON.parse(raw) as RagSession[]; } catch { return []; }
 }
 
+/**
+ * Look up a session by ID. Returns the session row or null if not found.
+ */
+export function getSession(sessionId: number): Record<string, any> | null {
+  const raw = runPy(
+    `from db import _conn; c = _conn(); row = c.execute("SELECT * FROM sessions WHERE id=?", (${sessionId},)).fetchone(); c.close(); print(json.dumps(dict(row)) if row else "null")`
+  );
+  if (!raw || raw === "null") return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
 export function saveCheckpoint(
   sessionId: number | null, taskId: string, step: number, status = "running"
 ): boolean {

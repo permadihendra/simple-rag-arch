@@ -18,7 +18,7 @@
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { execSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 
 // ── Helpers ───────────────────────────────────────────────────────
@@ -176,6 +176,17 @@ function buildRuntimePrompt(agentId, maxTokens = 2000) {
   return runPy(
     `from db import build_runtime_prompt; prompt = build_runtime_prompt(${JSON.stringify(agentId)}, ${maxTokens}); print(prompt)`
   );
+}
+
+/**
+ * Check if a session ID exists in the DB.
+ */
+function getSession(sessionId) {
+  const raw = runPy(
+    `from db import _conn; c = _conn(); row = c.execute("SELECT id FROM sessions WHERE id=?", (${sessionId},)).fetchone(); c.close(); print(json.dumps(dict(row)) if row else "null")`
+  );
+  if (!raw || raw === "null") return null;
+  try { return JSON.parse(raw); } catch { return null; }
 }
 
 // ── N+1 Next Step Tracking ────────────────────────────────────────────
@@ -674,6 +685,22 @@ export default definePluginEntry({
 
     api.on("session_start", async (_event, _ctx) => {
       if (!dbReady() || !autoSave) return;
+
+      // Try to reuse rag.py's session from the active session marker
+      const markerPath = path.join(getRagDir(), "runtime", ".active_session_" + agentId);
+      try {
+        const markerContent = readFileSync(markerPath, "utf-8").trim();
+        const parsed = parseInt(markerContent, 10);
+        if (!isNaN(parsed) && getSession(parsed)) {
+          currentSessionId = parsed;
+          turnCount = 0;
+          api.logger?.info?.("[rag-memory] Reusing rag.py session " + currentSessionId);
+          return;
+        }
+      } catch {
+        // Marker not found or invalid — fall through to start new session
+      }
+
       currentSessionId = startSession(agentId);
       turnCount = 0;
       if (currentSessionId) {

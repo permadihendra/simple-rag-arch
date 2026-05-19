@@ -46,7 +46,8 @@ from retrieval_router import retrieve, format_retrieval_context
 from db import (
     register_agent, get_agent, list_agents, _conn,
     start_session, end_session, build_runtime_prompt, build_context,
-    save_checkpoint, get_pending_tasks, search_notes, search_sessions,
+    save_checkpoint, get_pending_tasks, get_recent_sessions,
+    search_notes, search_sessions,
     add_note, now,
 )
 
@@ -303,15 +304,18 @@ def start(
 
     existing = _active_session(aid)
     if existing is not None:
-        console.print(f"[yellow]⚠ Active session [bold]{existing}[/] already exists for [bold]{aid}[/][/]")
-        if not Confirm.ask("Start new session anyway?"):
-            console.print("[dim]Refreshing context...[/]")
-            prompt = _generate_context(aid)
-            console.print(_render_panel("Runtime Context (refreshed)", Markdown(prompt), "green"))
-            return
-
-    sid = start_session(aid)
-    (BASE / "runtime" / f".active_session_{aid}").write_text(str(sid))
+        sid = existing
+        console.print(f"[green]● Continuing session [bold]{sid}[/] for [bold]{aid}[/][/]")
+    else:
+        # Reference latest ended session for continuity awareness
+        last_sessions = get_recent_sessions(aid, 1)
+        sid = start_session(aid)
+        (BASE / "runtime" / f".active_session_{aid}").write_text(str(sid))
+        if last_sessions:
+            ls = last_sessions[0]
+            dur = ls.get("duration_s", "?") or "?"
+            summary = (ls.get("summary") or "(no summary)")[:60]
+            console.print(f"📋 Last session was [bold]#{ls['id']}[/] ({dur}s) — {summary}")
 
     prompt = _generate_context(aid)
     agent_info = get_agent(aid)
@@ -320,12 +324,15 @@ def start(
     icon = plat_info.get("icon", "")
     plat_label = plat_info.get("name", plat)
 
+    title_text = f"● Session {sid} continued" if existing else f"🚀 Session {sid} started"
+    title_style = "green" if existing else "bright_green"
+
     console.print(Panel(
-        f"[bold green]Session {sid} started[/]\n"
+        f"[bold]{title_text}[/]\n"
         f"{icon} [bold]{name}[/] [dim]({aid})[/] on [bold]{plat_label}[/]\n"
         f"[dim]Runtime prompt:[/] [cyan]{BASE / 'runtime' / 'runtime_prompt.md'}[/]\n"
         f"[dim]Context budget:[/] ~{len(prompt.split())} words / {max_tokens} tokens",
-        title="🚀 Agent Launched", border_style="bright_green",
+        title="🚀 Agent Launched", border_style=title_style,
     ))
 
     console.print(f"\n[dim]Use [bold]rag end {aid}[/] to close session when done.[/]")
