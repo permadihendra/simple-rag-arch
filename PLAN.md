@@ -308,6 +308,13 @@ CREATE TABLE next_steps (
 - Links to session_id for traceability
 - `get_pending_tasks(agent_id)` → resume from last known state
 
+### 4b. Checkpoint ↔ N+1 Auto-Sync ✅
+- `next_steps` table has `task_id` column linking to checkpoint tasks
+- **Auto-complete**: When `save_checkpoint(status='success')`, any N+1 with matching `task_id` auto-completes
+- **Dedup**: `add_next_step(task_id=...)` updates existing pending N+1 instead of creating duplicates
+- **Lifecycle**: task_id links fine-grained checkpoints to strategic N+1 roadmap
+- This eliminates the need to manually coordinate checkpoints and N+1 steps
+
 ### 5. Notes + Retrieval ✅
 - `add_note(agent_id, title, content, tags, importance)`
 - Normalised tags (separate `tags` + `note_tags` tables)

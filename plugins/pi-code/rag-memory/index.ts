@@ -610,11 +610,14 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
     label: "📍 RAG Checkpoint",
     description:
       "Save a workflow checkpoint that can be resumed if interrupted. " +
-      "Use for multi-step tasks — call after each step so progress is never lost.",
+      "Use for multi-step tasks — call after each step so progress is never lost.\n\n" +
+      "AUTO-SYNC WITH N+1: When a checkpoint status='success', any N+1 step " +
+      "linked to the same task_id will auto-complete. No need to call both separately.",
     promptSnippet: "Save a workflow checkpoint for resumable tasks",
     promptGuidelines: [
       "For multi-step tasks, call rag_checkpoint after each step to track progress.",
       "If a task fails, call rag_checkpoint with status='failed' and a description of what went wrong.",
+      "TIP: Checkpoints auto-complete linked N+1 steps — use the same task_id for both.",
     ],
     parameters: Type.Object({
       taskId: Type.String({
@@ -727,11 +730,15 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
     description:
       "Record what the NEXT step should be after the current work. " +
       "This creates a 'N+1' todo that will be shown in future sessions. " +
-      "Use this when finishing a step — what should happen next?",
+      "Use this when finishing a step — what should happen next?\n\n" +
+      "SYNC WITH CHECKPOINTS: If you provide a task_id, it links this N+1 " +
+      "to a checkpoint task. When the checkpoint task completes (status='success'), " +
+      "this N+1 auto-completes. Duplicates by task_id are prevented.",
     promptSnippet: "Record the next step (N+1) for resumable workflows",
     promptGuidelines: [
       "When finishing a task step, call rag_next_step to record what comes next (N+1).",
       "This ensures work is resumable even if the session is interrupted.",
+      "TIP: Use task_id to link N+1 to checkpoint tasks — they'll auto-sync.",
     ],
     parameters: Type.Object({
       description: Type.String({
@@ -743,6 +750,12 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
           default: 0,
         })
       ),
+      taskId: Type.Optional(
+        Type.String({
+          description: "Link to a checkpoint task_id (e.g. 'build-api', 'fix-auth'). " +
+            "Auto-completes this N+1 when the checkpoint task finishes.",
+        })
+      ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       if (!dbReady) {
@@ -752,14 +765,16 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
       const ns = rag.addNextStep(
         params.description,
         params.priority ?? 0,
-        state.sessionId
+        state.sessionId,
+        params.taskId ?? null
       );
 
       if (ns) {
         state.whatWorked.push(`Next step: ${params.description.slice(0, 60)}`);
+        const linked = params.taskId ? ` (linked to task: ${params.taskId})` : "";
         return {
-          content: [{ type: "text", text: `➡️ N+1 recorded: "${params.description}" (priority: ${params.priority ?? 0})` }],
-          details: { nextStepId: ns.id },
+          content: [{ type: "text", text: `➡️ N+1 recorded: "${params.description}" (priority: ${params.priority ?? 0})${linked}` }],
+          details: { nextStepId: ns.id, taskId: params.taskId ?? null },
         };
       }
 

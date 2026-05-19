@@ -182,14 +182,19 @@ export interface RagNextStep {
 
 /**
  * Record a next-step action. Returns the new next_step row or null.
+ *
+ * If taskId is provided, links this N+1 to a checkpoint task for auto-sync.
+ * Duplicates by taskId are prevented (updates existing instead).
  */
 export function addNextStep(
   description: string,
   priority = 0,
-  sessionId: number | null = null
+  sessionId: number | null = null,
+  taskId: string | null = null
 ): RagNextStep | null {
+  const taskIdArg = taskId !== null ? `, task_id=${JSON.stringify(taskId)}` : "";
   const raw = runPy(
-    `from db import add_next_step; ns = add_next_step(${sessionId ?? "None"}, ${JSON.stringify(description)}, ${priority}); print(json.dumps(dict(ns)))`
+    `from db import add_next_step; ns = add_next_step(${sessionId ?? "None"}, ${JSON.stringify(description)}, ${priority}${taskIdArg}); print(json.dumps(dict(ns)))`
   );
   if (!raw) return null;
   try { return JSON.parse(raw) as RagNextStep; } catch { return null; }

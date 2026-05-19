@@ -29,7 +29,7 @@ BASE_DIR = os.path.dirname(DB_PATH)
 
 # ── Versioned schema ──────────────────────────────────────────────────────────
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
 
 SCHEMA_SQL = """
 -- 1. Version tracking
@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS agents (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
     persona_file TEXT NOT NULL,
+    platform    TEXT NOT NULL DEFAULT 'openclaw',
     status      TEXT NOT NULL DEFAULT 'active',
     created_at  TEXT NOT NULL
 );
@@ -105,9 +106,12 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 );
 
 -- 6. Next steps (normalised)
+-- task_id links to checkpoint tasks for auto-sync behavior.
+-- When a checkpoint status='success', the linked N+1 auto-completes.
 CREATE TABLE IF NOT EXISTS next_steps (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id  INTEGER REFERENCES sessions(id),
+    task_id     TEXT,                    -- links to checkpoint task_id (optional)
     description TEXT NOT NULL,
     priority    INTEGER NOT NULL DEFAULT 0,
     status      TEXT NOT NULL DEFAULT 'pending',
@@ -191,6 +195,24 @@ def init_db(force: bool = False) -> bool:
 
     # Full schema (idempotent with IF NOT EXISTS)
     c.executescript(SCHEMA_SQL + "\n" + FTS_TRIGGERS)
+
+    # ── Migrations ────────────────────────────────────────────────
+    # v1 → v2: add platform column to agents
+    if current < 2:
+        try:
+            c.execute("ALTER TABLE agents ADD COLUMN platform TEXT NOT NULL DEFAULT 'openclaw'")
+            print("[db] Migration v1→v2: added platform column to agents")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+
+    # v2 → v3: add task_id column to next_steps (links to checkpoint tasks)
+    if current < 3:
+        try:
+            c.execute("ALTER TABLE next_steps ADD COLUMN task_id TEXT")
+            print("[db] Migration v2→v3: added task_id column to next_steps")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+
     c.execute(
         "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
         (SCHEMA_VERSION, now()),
@@ -338,13 +360,23 @@ def get_recent_sessions(agent_id: str, limit: int = 5) -> list[dict]:
 
 def save_checkpoint(session_id: int | None, task_id: str, step: int,
                     status: str = "running", payload: dict | None = None) -> dict:
-    """Create or update a workflow checkpoint. Returns the checkpoint row."""
+    """
+    Create or update a workflow checkpoint. Returns the checkpoint row.
+
+    Auto-sync with N+1 steps:
+      - When status='success' and a pending N+1 with matching task_id exists,
+        that N+1 is auto-completed.
+      - When it's the FIRST step created (step 1, new task), any matching N+1
+        is auto-transitioned to reflect it's in progress.
+    """
     ts = now()
     c = _conn()
     existing = c.execute(
         "SELECT * FROM checkpoints WHERE task_id=? AND step=?",
         (task_id, step),
     ).fetchone()
+
+    is_new_task = False
 
     if existing:
         retries = existing["retry_count"] + 1 if status == "failed" else existing["retry_count"]
@@ -362,6 +394,20 @@ def save_checkpoint(session_id: int | None, task_id: str, step: int,
             (session_id, task_id, step, status, json.dumps(payload) if payload else None, ts, ts),
         )
         cid = cur.lastrowid
+        # Check if this is the first step of a new task
+        existing_count = c.execute(
+            "SELECT COUNT(*) FROM checkpoints WHERE task_id=?", (task_id,)
+        ).fetchone()[0]
+        is_new_task = (existing_count == 1 and step == 1)
+
+    # ── Auto-sync: checkpoint success → complete linked N+1 ──────────
+    if status == "success":
+        completed = c.execute(
+            "UPDATE next_steps SET status='completed' WHERE task_id=? AND status='pending'",
+            (task_id,),
+        )
+        if completed.rowcount > 0:
+            print(f"[db] Auto-completed N+1 for task '{task_id}' (checkpoint step {step} → success)")
 
     c.commit()
     row = dict(c.execute("SELECT * FROM checkpoints WHERE id=?", (cid,)).fetchone())
@@ -398,13 +444,39 @@ def get_checkpoints_for_task(task_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def add_next_step(session_id: int | None, description: str, priority: int = 0, agent_id: str | None = None) -> dict:
-    """Record a next-step action for an agent or session.
-    Returns the new next_step row."""
+def add_next_step(session_id: int | None, description: str, priority: int = 0,
+                  agent_id: str | None = None, task_id: str | None = None) -> dict:
+    """
+    Record a next-step action for an agent or session.
+
+    If task_id is provided and a pending N+1 with that task_id already exists,
+    the existing one is updated instead of creating a duplicate.
+    This ensures checkpoints and N+1 stay in sync.
+
+    Returns the new or updated next_step row.
+    """
     c = _conn()
+
+    # Dedup by task_id: if a pending N+1 with this task_id exists, update it
+    if task_id:
+        existing = c.execute(
+            "SELECT * FROM next_steps WHERE task_id=? AND status='pending'",
+            (task_id,),
+        ).fetchone()
+        if existing:
+            c.execute(
+                "UPDATE next_steps SET description=?, priority=?, session_id=? WHERE id=?",
+                (description, priority, session_id, existing["id"]),
+            )
+            c.commit()
+            row = dict(c.execute("SELECT * FROM next_steps WHERE id=?", (existing["id"],)).fetchone())
+            c.close()
+            return row
+
+    # No existing N+1 with this task_id — insert new
     cur = c.execute(
-        "INSERT INTO next_steps (session_id, description, priority, created_at) VALUES (?,?,?,?)",
-        (session_id, description, priority, now()),
+        "INSERT INTO next_steps (session_id, task_id, description, priority, created_at) VALUES (?,?,?,?,?)",
+        (session_id, task_id, description, priority, now()),
     )
     c.commit()
     row = dict(c.execute("SELECT * FROM next_steps WHERE id=?", (cur.lastrowid,)).fetchone())
@@ -437,13 +509,35 @@ def get_pending_next_steps(agent_id: str | None = None, limit: int = 10) -> list
     return [dict(r) for r in rows]
 
 
-def complete_next_step(next_step_id: int) -> bool:
-    """Mark a next step as completed."""
+def complete_next_step(next_step_id: int | None = None, task_id: str | None = None) -> bool:
+    """
+    Mark a next step as completed.
+
+    Can complete by ID or by task_id (for auto-sync with checkpoints).
+    If both are given, task_id takes precedence for finding the row, then ID is verified.
+    Returns True if any row was updated.
+    """
     c = _conn()
-    c.execute("UPDATE next_steps SET status='completed' WHERE id=?", (next_step_id,))
+
+    if task_id:
+        # Complete by task_id — handles the checkpoint→N+1 auto-link
+        c.execute(
+            "UPDATE next_steps SET status='completed' WHERE task_id=? AND status='pending'",
+            (task_id,),
+        )
+    elif next_step_id:
+        c.execute(
+            "UPDATE next_steps SET status='completed' WHERE id=?",
+            (next_step_id,),
+        )
+    else:
+        c.close()
+        return False
+
     c.commit()
+    changed = c.total_changes > 0
     c.close()
-    return True
+    return changed
 
 
 # ── Notes + Tags CRUD ────────────────────────────────────────────────────────

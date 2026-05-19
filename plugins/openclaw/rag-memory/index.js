@@ -171,9 +171,10 @@ function buildRuntimePrompt(agentId, maxTokens = 2000) {
 
 // ── N+1 Next Step Tracking ────────────────────────────────────────────
 
-function addNextStep(description, priority = 0, sessionId = null) {
+function addNextStep(description, priority = 0, sessionId = null, taskId = null) {
+  const taskIdArg = taskId !== null ? `, task_id=${JSON.stringify(taskId)}` : "";
   const raw = runPy(
-    `from db import add_next_step; ns = add_next_step(${sessionId ?? "None"}, ${JSON.stringify(description)}, ${priority}); print(json.dumps(dict(ns)))`
+    `from db import add_next_step; ns = add_next_step(${sessionId ?? "None"}, ${JSON.stringify(description)}, ${priority}${taskIdArg}); print(json.dumps(dict(ns)))`
   );
   if (!raw) return null;
   try { return JSON.parse(raw); } catch { return null; }
@@ -409,7 +410,8 @@ function createRagNextStepTool(api) {
     label: "➡️ RAG Next Step (N+1)",
     description:
       "Record what the NEXT step should be after the current work. " +
-      "Creates a N+1 todo that will be shown in future sessions for resumable workflows.",
+      "Creates a N+1 todo that will be shown in future sessions for resumable workflows. " +
+      "SYNC: Provide task_id to link to a checkpoint task — auto-completes when checkpoint succeeds.",
     parameters: {
       type: "object",
       properties: {
@@ -422,6 +424,11 @@ function createRagNextStepTool(api) {
           description: "Priority 0-5 (0=normal, 5=urgent)",
           default: 0,
         },
+        taskId: {
+          type: "string",
+          description: "Link to a checkpoint task_id (e.g. 'build-api', 'fix-auth'). " +
+            "Auto-completes when the checkpoint task finishes. Prevents duplicates.",
+        },
       },
       required: ["description"],
     },
@@ -431,9 +438,11 @@ function createRagNextStepTool(api) {
       }
       const description = String(rawParams.description || "");
       const priority = parseInt(rawParams.priority, 10) || 0;
-      const ns = addNextStep(description, priority, null);
+      const taskId = rawParams.taskId ? String(rawParams.taskId) : null;
+      const ns = addNextStep(description, priority, null, taskId);
       if (ns) {
-        return textResult(`➡️ N+1 recorded: "${description}" (priority: ${priority})`);
+        const linked = taskId ? ` (linked to task: ${taskId})` : "";
+        return textResult(`➡️ N+1 recorded: "${description}" (priority: ${priority})${linked}`);
       }
       return textResult("❌ Failed to save next step");
     },
@@ -446,7 +455,9 @@ function createRagCheckpointTool(api) {
     label: "RAG Checkpoint",
     description:
       "Save a workflow checkpoint that can be resumed later if interrupted. " +
-      "Use this for multi-step tasks to track progress.",
+      "Use this for multi-step tasks to track progress.\n\n" +
+      "AUTO-SYNC WITH N+1: When status='success', any N+1 linked to the same " +
+      "task_id auto-completes. No need to call rag_next_step separately.",
     parameters: {
       type: "object",
       properties: {
