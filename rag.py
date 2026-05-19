@@ -441,15 +441,20 @@ def search(
 ):
     """Search memory through the Retrieval Router with confidence scoring."""
     aid = agent or "pi-code"
-    console.print(f"[bold]🔍 Searching:[/] [cyan]{query}[/] [dim]via Retrieval Router (agent: {aid})[/]\n")
     result = retrieve(query, aid, limit)
-    if not result:
-        console.print("[red]✗ Retrieval Router error[/]")
-        return
 
     if json:
         import json as _json
-        console.print(_json.dumps(result, indent=2, default=str))
+        # Pure JSON output — no rich formatting
+        if not result:
+            print(_json.dumps({"error": "Retrieval Router error", "query": query, "agent_id": aid}))
+        else:
+            print(_json.dumps(result, indent=2, default=str))
+        return
+
+    console.print(f"[bold]🔍 Searching:[/] [cyan]{query}[/] [dim]via Retrieval Router (agent: {aid})[/]\n")
+    if not result:
+        console.print("[red]✗ Retrieval Router error[/]")
         return
 
     # Confidence summary
