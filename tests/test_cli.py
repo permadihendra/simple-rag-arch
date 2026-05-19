@@ -252,8 +252,6 @@ def test_search_openclaw():
           f"missing results for linux-admin")
 
 
-# ── Test 8: rag context <agent> ─────────────────────────────────────
-
 # ── Test 8: rag search --json ─────────────────────────────────────
 
 def test_search_json():
@@ -310,11 +308,16 @@ def test_context():
           f"missing budget section")
 
 
-# ── Test 9: rag end with no active session ─────────────────────────
+# ── Test 10: rag end with no active session ────────────────────────
 
 def test_end_no_session():
-    """rag end <agent> — error when no active session"""
-    result = run_rag("end", "linux-admin")
+    """rag end <agent> — error when no active session.
+    Uses edge-tester which should have no active session.
+    Ends any lingering session first to ensure clean state."""
+    # Clean up any lingering marker first
+    run_rag("end", "edge-tester", "-s", "cleanup")
+
+    result = run_rag("end", "edge-tester")
 
     check("exit code 1 (error)", result.returncode == 1,
           f"got code {result.returncode}")

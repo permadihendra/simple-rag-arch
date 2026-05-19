@@ -79,6 +79,12 @@ def _agents_by_platform(platform: str | None = None) -> list[dict]:
             "SELECT * FROM agents WHERE status='active' AND platform=? ORDER BY id",
             (platform,),
         ).fetchall()
+        # Fallback: if no agents match this platform, show ALL agents.
+        # The platform flag primarily determines which CLI to launch (pi vs openclaw).
+        if not rows:
+            rows = c.execute(
+                "SELECT * FROM agents WHERE status='active' ORDER BY platform, id"
+            ).fetchall()
     else:
         rows = c.execute(
             "SELECT * FROM agents WHERE status='active' ORDER BY platform, id"
@@ -107,9 +113,11 @@ def _pick_platform() -> str:
 
 def _pick_agent(agents: list[dict], platform: str | None = None) -> str:
     tag = f" on [bold]{PLATFORMS.get(platform,{}).get('name',platform)}[/]" if platform else ""
+    # Use selected platform icon for all agents (agents may be stored with different platform)
+    platform_icon = PLATFORMS.get(platform or "", {}).get("icon", "")
     console.print(f"\n[bold]🦞 Select an agent{tag}:[/]")
     for i, a in enumerate(agents, 1):
-        icon = PLATFORMS.get(a.get("platform", ""), {}).get("icon", "")
+        icon = platform_icon or PLATFORMS.get(a.get("platform", ""), {}).get("icon", "")
         console.print(f"  [cyan]{i}.[/] {icon} {a['name']} [dim]({a['id']})[/]")
     console.print(f"  [cyan]q.[/] Quit")
     choice = Prompt.ask("Choice", default="1")
