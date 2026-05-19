@@ -79,12 +79,6 @@ def _agents_by_platform(platform: str | None = None) -> list[dict]:
             "SELECT * FROM agents WHERE status='active' AND platform=? ORDER BY id",
             (platform,),
         ).fetchall()
-        # Fallback: if no agents match this platform, show ALL agents.
-        # The platform flag primarily determines which CLI to launch (pi vs openclaw).
-        if not rows:
-            rows = c.execute(
-                "SELECT * FROM agents WHERE status='active' ORDER BY platform, id"
-            ).fetchall()
     else:
         rows = c.execute(
             "SELECT * FROM agents WHERE status='active' ORDER BY platform, id"
@@ -113,11 +107,9 @@ def _pick_platform() -> str:
 
 def _pick_agent(agents: list[dict], platform: str | None = None) -> str:
     tag = f" on [bold]{PLATFORMS.get(platform,{}).get('name',platform)}[/]" if platform else ""
-    # Use selected platform icon for all agents (agents may be stored with different platform)
-    platform_icon = PLATFORMS.get(platform or "", {}).get("icon", "")
     console.print(f"\n[bold]🦞 Select an agent{tag}:[/]")
     for i, a in enumerate(agents, 1):
-        icon = platform_icon or PLATFORMS.get(a.get("platform", ""), {}).get("icon", "")
+        icon = PLATFORMS.get(a.get("platform", ""), {}).get("icon", "❓")
         console.print(f"  [cyan]{i}.[/] {icon} {a['name']} [dim]({a['id']})[/]")
     console.print(f"  [cyan]q.[/] Quit")
     choice = Prompt.ask("Choice", default="1")
@@ -136,9 +128,11 @@ def _resolve_platform(p: str | None) -> str:
     if p:
         if p not in PLATFORMS:
             # Check if it's an agent ID instead — allows "rag start linux-admin"
-            agent = get_agent(p)
-            if agent or p in AGENT_MAP:
-                return "openclaw"  # default platform when an agent is given directly
+            a = get_agent(p)
+            if a:
+                return a.get("platform", "openclaw")
+            if p in AGENT_MAP:
+                return "pi-code" if p == "pi-code" else "openclaw"
             console.print(f"[red]✗ Unknown platform: [bold]{p}[/]. Options: {', '.join(PLATFORMS)}[/]")
             raise typer.Exit(code=1)
         return p
@@ -263,6 +257,15 @@ def start(
         if get_agent(agent_candidate) or agent_candidate in AGENT_MAP:
             agent = agent_candidate
             platform = None
+
+    # Auto-detect platform from known agent
+    if agent and platform is None:
+        a = get_agent(agent)
+        if a and a.get("platform"):
+            platform = a["platform"]
+        elif agent in AGENT_MAP:
+            platform = "pi-code" if agent == "pi-code" else "openclaw"
+
     plat = _resolve_platform(platform)
     aid = _resolve_agent(agent, plat)
 
@@ -551,6 +554,6 @@ def checkpoint(
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        _show_menu()
+        console.print(__doc__)
     else:
         app()
