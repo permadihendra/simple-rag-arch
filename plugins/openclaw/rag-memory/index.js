@@ -17,7 +17,7 @@
  */
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { execSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 
@@ -57,11 +57,12 @@ function runPy(oneLiner) {
   if (!dbReady()) return null;
   const pyCode = `import sys, json; sys.path.insert(0, ${JSON.stringify(path.join(getRagDir(), "scripts"))}); ${oneLiner}`;
   try {
-    return execSync([getVenvePython(), "-c", pyCode], {
+    const result = spawnSync(getVenvePython(), ["-c", pyCode], {
       encoding: "utf-8",
       timeout: 10_000,
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
+    });
+    if (result.error) throw result.error;
+    return (result.stdout || "").trim();
   } catch (e) {
     console.error(`[rag-memory] Python error: ${e.message}`);
     return null;

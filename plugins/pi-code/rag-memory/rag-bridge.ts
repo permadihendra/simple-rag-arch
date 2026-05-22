@@ -5,7 +5,7 @@
  * Uses child_process to call the existing Python scripts/db.py functions.
  */
 
-import { execSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
 
@@ -57,14 +57,16 @@ export interface RagNextStep {
 
 function runPy(oneLiner: string): string | null {
   try {
-    return execSync(
+    const result = spawnSync(
+      VENV_PYTHON,
       [
-        VENV_PYTHON,
         "-c",
         `import sys, json; sys.path.insert(0, ${JSON.stringify(path.join(RAG_DIR, "scripts"))}); ${oneLiner}`,
       ],
       { encoding: "utf-8", timeout: 10_000 }
-    ).trim();
+    );
+    if (result.error) throw result.error;
+    return (result.stdout || "").trim();
   } catch (e: any) {
     console.error(`[rag-bridge] Python error: ${e.message}`);
     return null;
