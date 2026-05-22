@@ -49,7 +49,8 @@ from db import (
     save_checkpoint, get_pending_tasks, get_recent_sessions,
     search_notes, search_sessions,
     add_note, now,
-    detect_project, sync_rag_context,
+    detect_project, sync_rag_context, build_project_context,
+    get_pending_next_steps,
 )
 
 # ── Globals ──────────────────────────────────────────────────────────────────
@@ -329,6 +330,39 @@ def start(
     if project_name:
         try:
             sync_rag_context(project_name)
+        except Exception:
+            pass
+
+    # ── Project preview ────────────────────────────────────────
+    if project_name:
+        console.print(f"")
+        console.print(f"[bold]📁 {project_name}[/]")
+        try:
+            proj_ctx = build_project_context(project_name)
+            # Find first substantive line (skip auto-generated header markers)
+            for line in proj_ctx.split("\n"):
+                stripped = line.strip()
+                if (stripped
+                    and not stripped.startswith("#")
+                    and not stripped.startswith("<!--")
+                    and not stripped.startswith("_")
+                    and not stripped.startswith("📝")
+                    and not stripped.startswith("📋")):
+                    console.print(f"   {stripped[:80]}")
+                    break
+
+            # Most recent session mentioning this project
+            last_proj = search_sessions(project_name, 1)
+            if last_proj:
+                s = last_proj[0]
+                summary = (s.get("summary") or "no summary")[:60]
+                console.print(f"   📋 Last: [dim]{summary}[/]")
+
+            # Priority next steps
+            next_steps = get_pending_next_steps(aid, 3)
+            if next_steps:
+                top = next_steps[0]
+                console.print(f"   ➡️ Next: [bold]{top['description'][:80]}[/]")
         except Exception:
             pass
 
