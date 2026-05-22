@@ -989,9 +989,9 @@ def build_context(agent_id: str, max_tokens: int = 6000) -> dict:
     if not agent:
         raise ValueError(f"Agent '{agent_id}' not found in DB. Register first.")
 
-    recent = get_recent_sessions(agent_id, limit=5)
+    recent = get_recent_sessions(agent_id, limit=3)
     pending = get_pending_tasks(agent_id)
-    notes_rows = search_notes("*", limit=5) if recent else []
+    notes_rows = search_notes("*", limit=3) if recent else []
 
     # Rough token estimate: 1 token ≈ 4 chars
     total_chars = len(str(agent)) + sum(len(str(s)) for s in recent) + \
@@ -1006,6 +1006,37 @@ def build_context(agent_id: str, max_tokens: int = 6000) -> dict:
         "token_budget_burned": budget_burned,
         "max_tokens": max_tokens,
     }
+
+
+def _fmt_duration(seconds: int | None) -> str:
+    """Format seconds into a short human string."""
+    if not seconds or seconds < 0:
+        return "?"
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h {(seconds % 3600) // 60}m"
+    return f"{seconds // 86400}d"
+
+
+def _truncate_list(items_str: str | None, max_items: int = 3) -> str:
+    """Parse a JSON array string, truncate to max_items, return formatted."""
+    if not items_str or items_str in ("null", "[]", ""):
+        return "—"
+    try:
+        items = json.loads(items_str)
+        if not items:
+            return "—"
+        shown = items[:max_items]
+        rest = len(items) - max_items
+        result = "; ".join(s[:50] for s in shown)
+        if rest > 0:
+            result += f" (+{rest} more)"
+        return result
+    except (json.JSONDecodeError, TypeError):
+        return str(items_str)[:100]
 
 
 def build_runtime_prompt(agent_id: str, max_tokens: int = 6000,
@@ -1025,10 +1056,15 @@ def build_runtime_prompt(agent_id: str, max_tokens: int = 6000,
 ── Recent Sessions ──"""]
     if ctx["recent_sessions"]:
         for s in ctx["recent_sessions"]:
+            summary = (s["summary"] or "(no summary)")[:200]
+            what_worked = _truncate_list(s.get("what_worked"), 3)
+            what_failed = _truncate_list(s.get("what_failed"), 2)
+            dur = _fmt_duration(s.get("duration_s"))
             lines.append(f"\n## Session {s['id']} ({s['created_at'][:19]})\n"
-                         f"  Summary: {s['summary'] or '(no summary)'}\n"
-                         f"  What worked: {s.get('what_worked') or '—'}\n"
-                         f"  Duration: {s.get('duration_s', '?')}s")
+                         f"  Summary: {summary}\n"
+                         f"  ✓ {what_worked}\n"
+                         f"  ✗ {what_failed}\n"
+                         f"  ⏱ {dur}")
     else:
         lines.append("  (No recent sessions)")
 

@@ -556,10 +556,10 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
     name: "rag_status",
     label: "📊 RAG Status",
     description:
-      "Show the current RAG memory status — active session, pending tasks, " +
-      "pending next steps (N+1), registered agents, and DB health. " +
+      "Show the current RAG memory status — project context, active session, " +
+      "pending tasks, pending next steps (N+1), registered agents, and DB health. " +
       "Call this at the start of work to check what needs to be done next.",
-    promptSnippet: "Check RAG memory status, pending tasks, and next steps (N+1)",
+    promptSnippet: "Check RAG memory status, project context, pending tasks, and next steps (N+1)",
     promptGuidelines: [
       "Call rag_status at the start of each session to see what work is pending and what the next step (N+1) should be.",
     ],
@@ -572,6 +572,18 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
       lines.push(`**Agent**: ${agent ? `${agent.name} (${agent.id})` : agentId}`);
       lines.push(`**Session**: ${state.sessionId ?? "none"} | **Turns**: ${state.turnCount} | **DB**: ${dbReady ? "✅" : "❌"}`);
       lines.push(`**This session**: ${state.sessionNoteCount} notes, ${state.sessionCheckpointCount} checkpoints`);
+
+      // ── Project context (merged from whatsup) ────────────
+      if (dbReady) {
+        const projData = rag.getProjectPreview(agentId);
+        if (projData) {
+          lines.push(`\n📁 **${projData.project}**`);
+          if (projData.description) lines.push(`   ${projData.description}`);
+          if (projData.last_session) {
+            lines.push(`   📋 Last: ${(projData.last_session.summary || "no summary").slice(0, 60)}`);
+          }
+        }
+      }
 
       if (dbReady && agentId) {
         // Last 3 sessions
@@ -848,55 +860,6 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
     },
   });
 
-  // ── rag_whatsup — project preview ──────────────────────────
-
-  pi.registerTool({
-    name: "rag_whatsup",
-    label: "📁 RAG What's Up",
-    description:
-      "Show what's up: detect the current project, sync project context, " +
-      "show project description, last session summary, and pending next steps. " +
-      "Call this when you want an overview of what project you're in and what needs to be done.",
-    promptSnippet: "Show project context, what was last done, and what needs to be done next",
-    parameters: Type.Object({}),
-    async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
-      if (!dbReady) {
-        return { content: [{ type: "text", text: "⚠ RAG database not available." }], details: {} };
-      }
-
-      const data = rag.getProjectPreview(getAgentId());
-      if (!data) {
-        return {
-          content: [{ type: "text", text: "📁 No project detected in current directory." }],
-          details: {},
-        };
-      }
-
-      const lines: string[] = [];
-      lines.push(`📁 [bold]${data.project}[/]`);
-      if (data.description) {
-        lines.push(`   ${data.description}`);
-      }
-      if (data.last_session) {
-        const s = data.last_session;
-        const summary = (s.summary || "no summary").slice(0, 60);
-        lines.push(`   📋 Last: [dim]${summary}[/]`);
-      }
-      if (data.next_steps && data.next_steps.length > 0) {
-        const top = data.next_steps[0];
-        lines.push(`   ➡️ Next: [bold]${top.description.slice(0, 80)}[/]`);
-        if (data.next_steps.length > 1) {
-          lines.push(`   📍 ${data.next_steps.length - 1} more pending step(s)`);
-        }
-      }
-
-      return {
-        content: [{ type: "text", text: lines.join("\n") }],
-        details: { project: data.project, hasLastSession: !!data.last_session, nextStepCount: data.next_steps?.length ?? 0 },
-      };
-    },
-  });
-
   // ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ─
   //  SLASH COMMANDS (typed directly by user)
   // ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ─
@@ -920,7 +883,7 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("rag-status", {
-    description: "Show RAG memory status — sessions, checkpoints, N+1 for all agents",
+    description: "Show full status — agent, project, sessions, checkpoints, N+1",
     handler: async (_args, ctx) => {
       const agentId = getAgentId();
       const agent = rag.getAgent(agentId);
@@ -932,7 +895,20 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
         `   This session: ${state.sessionNoteCount} notes, ${state.sessionCheckpointCount} checkpoints`,
       ];
 
-      // Last 3 sessions for current agent
+      // ── Project context (merged from whatsup) ────────────
+      if (dbReady) {
+        const projData = rag.getProjectPreview(agentId);
+        if (projData) {
+          lines.push(`\n📁 ${projData.project}`);
+          if (projData.description) lines.push(`   ${projData.description}`);
+          if (projData.last_session) {
+            const s = projData.last_session;
+            lines.push(`   📋 Last: ${(s.summary || "no summary").slice(0, 60)}`);
+          }
+        }
+      }
+
+      // Recent sessions for current agent
       if (dbReady) {
         const recent = rag.getRecentSessions(agentId, 3);
         if (recent.length > 0) {
@@ -1091,37 +1067,19 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("rag-whatsup", {
-    description: "Show project context, last session, and next steps",
+  pi.registerCommand("rag-refresh", {
+    description: "Force-refresh project context (re-scan source docs)",
     handler: async (_args, ctx) => {
       if (!dbReady) {
         ctx.ui.notify("⚠ RAG database not available.", "warning");
         return;
       }
-
       const data = rag.getProjectPreview(getAgentId());
       if (!data) {
         ctx.ui.notify("📁 No project detected in current directory.", "warning");
         return;
       }
-
-      const lines = [`📁 ${data.project}`];
-      if (data.description) {
-        lines.push(`   ${data.description}`);
-      }
-      if (data.last_session) {
-        const summary = (data.last_session.summary || "no summary").slice(0, 60);
-        lines.push(`   📋 Last: ${summary}`);
-      }
-      if (data.next_steps && data.next_steps.length > 0) {
-        const top = data.next_steps[0];
-        lines.push(`   ➡️ Next: ${top.description.slice(0, 80)}`);
-        if (data.next_steps.length > 1) {
-          lines.push(`   📍 ${data.next_steps.length - 1} more pending step(s)`);
-        }
-      }
-
-      ctx.ui.notify(lines.join("\n"), "info");
+      ctx.ui.notify(`📁 ${data.project} — context refreshed`, "info");
     },
   });
 }

@@ -370,8 +370,8 @@ function createRagStatusTool(api) {
     name: "rag_status",
     label: "RAG Status",
     description:
-      "Show the current RAG memory status — active session, pending tasks, " +
-      "pending next steps (N+1), and registered agents. Check this before starting new work.",
+      "Show the current RAG memory status — project context, active session, " +
+      "pending tasks, pending next steps (N+1), and registered agents. Check this before starting new work.",
     parameters: {
       type: "object",
       properties: {},
@@ -388,6 +388,35 @@ function createRagStatusTool(api) {
         lines.push(`**Agent**: ${agent.name} (${agent.id})`);
       } else {
         lines.push(`**Agent**: ${agentId} (not registered in RAG)`);
+      }
+
+      // ── Project context (merged from whatsup) ────────────
+      const projRaw = runPy(`
+from db import detect_project, sync_rag_context, build_project_context, search_sessions
+proj = detect_project()
+if proj:
+    sync_rag_context(proj)
+    ctx = build_project_context(proj)
+    last = search_sessions(proj, 1)
+    desc = ""
+    for line in ctx.split("\\n"):
+        s = line.strip()
+        if s and not s.startswith("#") and not s.startswith("<!--") and not s.startswith("_"):
+            desc = s[:80]
+            break
+    print(json.dumps({"project": proj, "description": desc, "last_session": dict(last[0]) if last else None}))
+else:
+    print("null")
+`);
+      if (projRaw && projRaw !== "null") {
+        try {
+          const pd = JSON.parse(projRaw);
+          if (pd.project) {
+            lines.push(`\n📁 **${pd.project}**`);
+            if (pd.description) lines.push(`   ${pd.description}`);
+            if (pd.last_session) lines.push(`   📋 Last: ${(pd.last_session.summary || "no summary").slice(0, 60)}`);
+          }
+        } catch {}
       }
 
       const tasks = getPendingTasks(agentId);
@@ -671,67 +700,6 @@ export default definePluginEntry({
           return textResult(`✅ Switched RAG agent from "${oldId}" to "${newAgentId}"`);
         }
         return textResult(`✅ RAG agent set to "${newAgentId}"`);
-      },
-    });
-
-    // ── Add rag_whatsup tool (project preview) ────────────────────
-
-    api.registerTool({
-      name: "rag_whatsup",
-      label: "📁 RAG What's Up",
-      description:
-        "Show what's up: detect the current project, sync project context, " +
-        "show project description, last session summary, and pending next steps.",
-      parameters: {
-        type: "object",
-        properties: {},
-      },
-      execute: async () => {
-        if (!dbReady()) {
-          return textResult("⚠ RAG database not available.");
-        }
-        const raw = runPy(`
-from db import detect_project, sync_rag_context, build_project_context, search_sessions, get_pending_next_steps
-proj = detect_project()
-if not proj:
-    print(json.dumps({"error": "No project detected"}))
-else:
-    sync_rag_context(proj)
-    ctx = build_project_context(proj)
-    last = search_sessions(proj, 1)
-    ns = get_pending_next_steps(${JSON.stringify(agentId)}, 3)
-    desc = ""
-    for line in ctx.split("\\n"):
-        s = line.strip()
-        if s and not s.startswith("#") and not s.startswith("<!--") and not s.startswith("_") and not s.startswith("📝") and not s.startswith("📋"):
-            desc = s[:80]
-            break
-    print(json.dumps({
-        "project": proj,
-        "description": desc,
-        "last_session": dict(last[0]) if last else None,
-        "next_steps": [dict(n) for n in (ns or [])],
-    }))
-`);
-        if (!raw) return textResult("❌ Failed to get project preview.");
-        try {
-          const data = JSON.parse(raw);
-          if (data.error) {
-            return textResult("📁 No project detected in current directory.");
-          }
-          const lines = [`📁 ${data.project}`];
-          if (data.description) lines.push(`   ${data.description}`);
-          if (data.last_session) lines.push(`   📋 Last: ${(data.last_session.summary || "no summary").slice(0, 60)}`);
-          if (data.next_steps && data.next_steps.length > 0) {
-            lines.push(`   ➡️ Next: ${data.next_steps[0].description.slice(0, 80)}`);
-            if (data.next_steps.length > 1) {
-              lines.push(`   📍 ${data.next_steps.length - 1} more pending step(s)`);
-            }
-          }
-          return textResult(lines.join("\n"));
-        } catch {
-          return textResult("❌ Failed to parse project preview.");
-        }
       },
     });
 
