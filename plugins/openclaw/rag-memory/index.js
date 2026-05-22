@@ -365,95 +365,6 @@ function createRagNoteTool(api) {
   };
 }
 
-function createRagStatusTool(api) {
-  return {
-    name: "rag_status",
-    label: "RAG Status",
-    description:
-      "Show the current RAG memory status — project context, active session, " +
-      "pending tasks, pending next steps (N+1), and registered agents. Check this before starting new work.",
-    parameters: {
-      type: "object",
-      properties: {},
-    },
-    execute: async () => {
-      if (!dbReady()) {
-        return textResult("⚠ RAG database not available.");
-      }
-
-      const agentId = (api.config && api.config.agentId) || "linux-admin";
-      const lines = [];
-      const agent = getAgent(agentId);
-      if (agent) {
-        lines.push(`**Agent**: ${agent.name} (${agent.id})`);
-      } else {
-        lines.push(`**Agent**: ${agentId} (not registered in RAG)`);
-      }
-
-      // ── Project context (merged from whatsup) ────────────
-      const projRaw = runPy(`
-from db import detect_project, sync_rag_context, build_project_context, search_sessions
-proj = detect_project()
-if proj:
-    sync_rag_context(proj)
-    ctx = build_project_context(proj)
-    last = search_sessions(proj, 1)
-    desc = ""
-    for line in ctx.split("\\n"):
-        s = line.strip()
-        if s and not s.startswith("#") and not s.startswith("<!--") and not s.startswith("_"):
-            desc = s[:80]
-            break
-    print(json.dumps({"project": proj, "description": desc, "last_session": dict(last[0]) if last else None}))
-else:
-    print("null")
-`);
-      if (projRaw && projRaw !== "null") {
-        try {
-          const pd = JSON.parse(projRaw);
-          if (pd.project) {
-            lines.push(`\n📁 **${pd.project}**`);
-            if (pd.description) lines.push(`   ${pd.description}`);
-            if (pd.last_session) lines.push(`   📋 Last: ${(pd.last_session.summary || "no summary").slice(0, 60)}`);
-          }
-        } catch {}
-      }
-
-      const tasks = getPendingTasks(agentId);
-      if (tasks.length > 0) {
-        lines.push(`\n**Pending tasks**: ${tasks.length}`);
-        for (const t of tasks) {
-          lines.push(`  - ${t.task_id} step ${t.step} → ${t.status} (retries: ${t.retry_count})`);
-        }
-      } else {
-        lines.push("\n**Pending tasks**: none ✅");
-      }
-
-      // N+1 next steps
-      const nextSteps = getPendingNextSteps(agentId);
-      if (nextSteps.length > 0) {
-        lines.push(`\n**N+1 — Next steps** (${nextSteps.length}):`);
-        for (const ns of nextSteps) {
-          const prio = ns.priority > 0 ? ` [prio:${ns.priority}]` : "";
-          lines.push(`  ${ns.id}. ${ns.description}${prio}`);
-        }
-      } else {
-        lines.push("\n**N+1 — Next steps**: none ✅");
-      }
-
-      const allAgents = listAgents();
-      if (allAgents.length > 0) {
-        lines.push(`\n**Registered agents** (${allAgents.length}):`);
-        for (const a of allAgents) {
-          lines.push(`  - ${a.name} (${a.id})`);
-        }
-      }
-
-      return textResult(lines.join("\n"));
-    },
-  };
-}
-
 function createRagNextStepTool(api) {
   return {
     name: "rag_next_step",
@@ -639,9 +550,20 @@ export default definePluginEntry({
     "Persistent session summaries, knowledge notes, workflow checkpoints, and cross-session recall.",
 
   register(api) {
-    const agentId = (api.config && api.config.agentId) || "linux-admin";
     const injectContext = api.config?.injectContext !== false;
     const autoSave = api.config?.autoSaveSessions !== false;
+
+    // ── Read one-time agent target from rag.py ────────────────
+    const agentMarkerPath = path.join(getRagDir(), "runtime", ".rag_target_agent");
+    try {
+      const target = readFileSync(agentMarkerPath, "utf-8").trim();
+      if (target && getAgent(target)) {
+        if (api.config) api.config.agentId = target;
+        try { require("fs").unlinkSync(agentMarkerPath); } catch {}
+      }
+    } catch {}
+
+    let agentId = (api.config && api.config.agentId) || "linux-admin";
 
     if (dbReady()) {
       api.logger?.info?.("[rag-memory] RAG database found at " + getDbPath());
@@ -659,11 +581,117 @@ export default definePluginEntry({
 
     api.registerTool(createRagSearchTool(api));
     api.registerTool(createRagNoteTool(api));
-    api.registerTool(createRagStatusTool(api));
-    api.registerTool(createRagCheckpointTool(api));
     api.registerTool(createRagNextStepTool(api));
 
-    // ── Add rag_configure tool (switch agent identity) ───────────────
+    // ── Session-level state ───────────────────────────────────────────
+
+    let currentSessionId = null;
+    let turnCount = 0;
+    let whatWorked = [];
+    let whatFailed = [];
+    let contextCache = null;
+    let contextCacheTurn = -1;
+
+    // ── Inline rag_status (uses shared state) ─────────────────────────
+
+    api.registerTool({
+      name: "rag_status",
+      label: "RAG Status",
+      description:
+        "Show current RAG status: project, session state, pending tasks, N+1, agents.",
+      parameters: { type: "object", properties: {} },
+      execute: async () => {
+        if (!dbReady()) return textResult("⚠ RAG database not available.");
+        const agentId = (api.config && api.config.agentId) || "linux-admin";
+        const lines = [];
+        const agent = getAgent(agentId);
+        if (agent) lines.push(`**Agent**: ${agent.name} (${agent.id})`);
+        else lines.push(`**Agent**: ${agentId}`);
+        lines.push(`**Session**: ${currentSessionId ?? "none"} | **Turns**: ${turnCount} | **DB**: ✅`);
+
+        // Project context
+        const pr = runPy(`
+from db import detect_project, sync_rag_context, build_project_context, search_sessions
+proj = detect_project()
+if proj:
+    sync_rag_context(proj)
+    ctx = build_project_context(proj)
+    last = search_sessions(proj, 1)
+    desc = ""
+    for line in ctx.split("\\n"):
+        s = line.strip()
+        if s and not s.startswith("#") and not s.startswith("<!--") and not s.startswith("_"):
+            desc = s[:80]
+            break
+    print(json.dumps({"project": proj, "description": desc, "last_session": dict(last[0]) if last else None}))
+else:
+    print("null")
+`);
+        if (pr && pr !== "null") {
+          try {
+            const pd = JSON.parse(pr);
+            if (pd.project) {
+              lines.push(`\n📁 **${pd.project}**`);
+              if (pd.description) lines.push(`   ${pd.description}`);
+              if (pd.last_session) lines.push(`   📋 Last: ${(pd.last_session.summary || "no summary").slice(0, 60)}`);
+            }
+          } catch {}
+        }
+
+        const tasks = getPendingTasks(agentId);
+        if (tasks.length > 0) {
+          lines.push(`\n**Pending tasks**: ${tasks.length}`);
+          for (const t of tasks) lines.push(`  - ${t.task_id} step ${t.step} → ${t.status}`);
+        } else lines.push("\n**Pending tasks**: none ✅");
+
+        const ns = getPendingNextSteps(agentId);
+        if (ns.length > 0) {
+          lines.push(`\n**N+1 — Next steps** (${ns.length}):`);
+          for (const s of ns) {
+            const p = s.priority > 0 ? ` [prio:${s.priority}]` : "";
+            lines.push(`  ${s.id}. ${s.description}${p}`);
+          }
+        } else lines.push("\n**N+1 — Next steps**: none ✅");
+
+        return textResult(lines.join("\n"));
+      },
+    });
+
+    // ── Inline checkpoint tool (needs currentSessionId) ───────────────
+
+    api.registerTool({
+      name: "rag_checkpoint",
+      label: "RAG Checkpoint",
+      description:
+        "Save a workflow checkpoint that can be resumed later if interrupted. " +
+        "Use this for multi-step tasks to track progress.\n\n" +
+        "AUTO-SYNC WITH N+1: When status='success', any N+1 linked to the same " +
+        "task_id auto-completes. No need to call rag_next_step separately.",
+      parameters: {
+        type: "object",
+        properties: {
+          taskId: { type: "string", description: "Task identifier" },
+          step: { type: "number", description: "Current step number" },
+          status: { type: "string", description: "Status", enum: ["running", "success", "failed", "pending"], default: "running" },
+          description: { type: "string", description: "What happened" },
+        },
+        required: ["taskId", "step"],
+      },
+      execute: async (_toolCallId, rawParams) => {
+        if (!dbReady()) return textResult("⚠ RAG database not available.");
+        const taskId = String(rawParams.taskId || "");
+        const step = parseInt(rawParams.step, 10) || 1;
+        const status = String(rawParams.status || "running");
+        const ok = saveCheckpoint(currentSessionId, taskId, step, status);
+        if (!ok) return textResult(`❌ Failed to save checkpoint.`);
+        const desc = rawParams.description ? ` — ${String(rawParams.description)}` : "";
+        const icons = { running: "▶️", pending: "⏳", success: "✅", failed: "❌" };
+        whatWorked.push(`Checkpoint: ${taskId} step ${step}`);
+        return textResult(`${icons[status] || "📌"} Checkpoint: ${taskId} step ${step} → ${status}${desc}`);
+      },
+    });
+
+    // ── Inline rag_configure (needs to manage sessions) ──────────────
 
     api.registerTool({
       name: "rag_configure",
@@ -674,55 +702,105 @@ export default definePluginEntry({
       parameters: {
         type: "object",
         properties: {
-          agentId: {
-            type: "string",
-            description: "Agent ID (e.g. linux-admin, pi-code, ops, coder, research)",
-          },
+          agentId: { type: "string", description: "Agent ID (e.g. linux-admin, pi-code)" },
         },
         required: ["agentId"],
       },
       execute: async (_toolCallId, rawParams) => {
-        if (!dbReady()) {
-          return textResult("⚠ RAG database not available.");
-        }
+        if (!dbReady()) return textResult("⚠ RAG database not available.");
         const newAgentId = String(rawParams.agentId || "");
-        if (!newAgentId) {
-          return textResult("⚠ Please provide an agentId.");
-        }
+        if (!newAgentId) return textResult("⚠ Please provide an agentId.");
 
-        // Auto-register if a new persona file exists
         autoRegisterAgents();
 
-        // Update config
+        // End current session if active
+        if (currentSessionId !== null) {
+          endSession(currentSessionId, `Switched to ${newAgentId}`, whatWorked, whatFailed, turnCount);
+          currentSessionId = null;
+          turnCount = 0;
+          whatWorked = [];
+          whatFailed = [];
+        }
+
         if (api.config) {
           const oldId = api.config.agentId || "?";
           api.config.agentId = newAgentId;
+          agentId = newAgentId;
+          contextCache = null;
           return textResult(`✅ Switched RAG agent from "${oldId}" to "${newAgentId}"`);
         }
         return textResult(`✅ RAG agent set to "${newAgentId}"`);
       },
     });
 
-    // ── Before prompt build: inject RAG context + track turns ─────
+    // ── Session tracking ────────────────────────────────────────────
 
-    let currentSessionId = null;
-    let turnCount = 0;
+    api.on("session_start", async (_event, _ctx) => {
+      if (!dbReady() || !autoSave) return;
+
+      const liveId = (api.config && api.config.agentId) || "linux-admin";
+
+      // Try to reuse rag.py's session from the active session marker
+      const sm = path.join(getRagDir(), "runtime", ".active_session_" + liveId);
+      try {
+        const mc = readFileSync(sm, "utf-8").trim();
+        const p = parseInt(mc, 10);
+        if (!isNaN(p) && getSession(p)) {
+          currentSessionId = p;
+          turnCount = 0;
+          whatWorked = [];
+          whatFailed = [];
+          return;
+        }
+      } catch {}
+
+      currentSessionId = startSession(liveId);
+      turnCount = 0;
+      whatWorked = [];
+      whatFailed = [];
+    });
+
+    api.on("session_end", async (_event, _ctx) => {
+      if (!dbReady() || !autoSave || currentSessionId === null) return;
+      const act = [];
+      if (whatWorked.length > 0) act.push(whatWorked.length + " done");
+      if (whatFailed.length > 0) act.push(whatFailed.length + " issues");
+      const as = act.length > 0 ? ` (${act.join(", ")})` : "";
+      endSession(currentSessionId,
+        `Session ${currentSessionId}: ${turnCount} turns${as}`,
+        whatWorked.slice(0, 5), whatFailed.slice(0, 3), turnCount);
+      currentSessionId = null;
+      turnCount = 0;
+      whatWorked = [];
+      whatFailed = [];
+    });
+
+    // ── Before prompt build: inject context + track turns ──────────
 
     api.on("before_prompt_build", async (_event, ctx) => {
       turnCount++;
 
       if (!injectContext) return;
       try {
-        const resolvedAgentId = agentId;
-        const contextStr = buildRagContextString(resolvedAgentId);
-        if (contextStr) {
+        // Read agentId live (may have changed via rag_configure)
+        const liveId = (api.config && api.config.agentId) || "linux-admin";
+
+        // Cache context — rebuild on turn change or agent switch
+        if (contextCache === null || contextCacheTurn !== turnCount || liveId !== agentId) {
+          contextCache = buildRagContextString(liveId);
+          contextCacheTurn = turnCount;
+          agentId = liveId;
+        }
+
+        if (contextCache) {
           const prefix =
             "[RAG Memory Context]\n" +
-            contextStr +
+            contextCache +
             "\n\n" +
-            "Use rag_search to search memory, rag_note to save knowledge, " +
-            "rag_checkpoint for workflow progress, rag_next_step for N+1 tracking, " +
-            "and rag_status to check pending tasks.\n";
+            "Available tools: rag_search (search memory), rag_note (save knowledge), " +
+            "rag_status (check project + tasks), rag_checkpoint (track progress), " +
+            "rag_next_step (set N+1), rag_configure (switch agent).\n" +
+            "Try saying: 'status', 'search for X', 'save this', 'check tasks'.\n";
 
           return { prependContext: prefix };
         }
@@ -731,47 +809,6 @@ export default definePluginEntry({
           "[rag-memory] before_prompt_build failed: " + (e.message || String(e))
         );
       }
-    });
-
-    // ── Session tracking ────────────────────────────────────────────
-
-    api.on("session_start", async (_event, _ctx) => {
-      if (!dbReady() || !autoSave) return;
-
-      // Try to reuse rag.py's session from the active session marker
-      const markerPath = path.join(getRagDir(), "runtime", ".active_session_" + agentId);
-      try {
-        const markerContent = readFileSync(markerPath, "utf-8").trim();
-        const parsed = parseInt(markerContent, 10);
-        if (!isNaN(parsed) && getSession(parsed)) {
-          currentSessionId = parsed;
-          turnCount = 0;
-          api.logger?.info?.("[rag-memory] Reusing rag.py session " + currentSessionId);
-          return;
-        }
-      } catch {
-        // Marker not found or invalid — fall through to start new session
-      }
-
-      currentSessionId = startSession(agentId);
-      turnCount = 0;
-      if (currentSessionId) {
-        api.logger?.info?.("[rag-memory] Started RAG session " + currentSessionId);
-      }
-    });
-
-    api.on("session_end", async (_event, _ctx) => {
-      if (!dbReady() || !autoSave || currentSessionId === null) return;
-      endSession(
-        currentSessionId,
-        `OpenClaw session: ${turnCount} turns`,
-        [],
-        [],
-        turnCount
-      );
-      api.logger?.info?.("[rag-memory] Ended RAG session " + currentSessionId);
-      currentSessionId = null;
-      turnCount = 0;
     });
   },
 });

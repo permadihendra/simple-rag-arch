@@ -420,6 +420,8 @@ def start(
     try:
         if plat == 'openclaw':
             _sync_openclaw_plugin()
+            # Write one-time agent target for the plugin to read on startup
+            (BASE / "runtime" / ".rag_target_agent").write_text(aid)
             os.execvp("openclaw", ["openclaw"])
         elif plat == 'pi-code':
             _sync_pi_code_extension()
