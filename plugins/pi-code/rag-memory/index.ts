@@ -848,6 +848,55 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
     },
   });
 
+  // ── rag_whatsup — project preview ──────────────────────────
+
+  pi.registerTool({
+    name: "rag_whatsup",
+    label: "📁 RAG What's Up",
+    description:
+      "Show what's up: detect the current project, sync project context, " +
+      "show project description, last session summary, and pending next steps. " +
+      "Call this when you want an overview of what project you're in and what needs to be done.",
+    promptSnippet: "Show project context, what was last done, and what needs to be done next",
+    parameters: Type.Object({}),
+    async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
+      if (!dbReady) {
+        return { content: [{ type: "text", text: "⚠ RAG database not available." }], details: {} };
+      }
+
+      const data = rag.getProjectPreview(getAgentId());
+      if (!data) {
+        return {
+          content: [{ type: "text", text: "📁 No project detected in current directory." }],
+          details: {},
+        };
+      }
+
+      const lines: string[] = [];
+      lines.push(`📁 [bold]${data.project}[/]`);
+      if (data.description) {
+        lines.push(`   ${data.description}`);
+      }
+      if (data.last_session) {
+        const s = data.last_session;
+        const summary = (s.summary || "no summary").slice(0, 60);
+        lines.push(`   📋 Last: [dim]${summary}[/]`);
+      }
+      if (data.next_steps && data.next_steps.length > 0) {
+        const top = data.next_steps[0];
+        lines.push(`   ➡️ Next: [bold]${top.description.slice(0, 80)}[/]`);
+        if (data.next_steps.length > 1) {
+          lines.push(`   📍 ${data.next_steps.length - 1} more pending step(s)`);
+        }
+      }
+
+      return {
+        content: [{ type: "text", text: lines.join("\n") }],
+        details: { project: data.project, hasLastSession: !!data.last_session, nextStepCount: data.next_steps?.length ?? 0 },
+      };
+    },
+  });
+
   // ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ─
   //  SLASH COMMANDS (typed directly by user)
   // ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ─
@@ -1039,6 +1088,40 @@ export default function ragMemoryExtension(pi: ExtensionAPI) {
       }
       setAgentId(id);
       ctx.ui.notify(`✅ RAG agent set to ${id}`, "info");
+    },
+  });
+
+  pi.registerCommand("rag-whatsup", {
+    description: "Show project context, last session, and next steps",
+    handler: async (_args, ctx) => {
+      if (!dbReady) {
+        ctx.ui.notify("⚠ RAG database not available.", "warning");
+        return;
+      }
+
+      const data = rag.getProjectPreview(getAgentId());
+      if (!data) {
+        ctx.ui.notify("📁 No project detected in current directory.", "warning");
+        return;
+      }
+
+      const lines = [`📁 ${data.project}`];
+      if (data.description) {
+        lines.push(`   ${data.description}`);
+      }
+      if (data.last_session) {
+        const summary = (data.last_session.summary || "no summary").slice(0, 60);
+        lines.push(`   📋 Last: ${summary}`);
+      }
+      if (data.next_steps && data.next_steps.length > 0) {
+        const top = data.next_steps[0];
+        lines.push(`   ➡️ Next: ${top.description.slice(0, 80)}`);
+        if (data.next_steps.length > 1) {
+          lines.push(`   📍 ${data.next_steps.length - 1} more pending step(s)`);
+        }
+      }
+
+      ctx.ui.notify(lines.join("\n"), "info");
     },
   });
 }

@@ -267,6 +267,40 @@ export function completeNextStep(nextStepId: number): boolean {
  * Scans for .md persona files not yet in the DB and registers them.
  * Returns the count of newly registered agents.
  */
+/**
+ * Get a project-aware preview: detect project, sync context, show what's up.
+ * Returns null if no project detected.
+ */
+export function getProjectPreview(agentId: string): Record<string, any> | null {
+  const raw = runPy(`
+from db import detect_project, sync_rag_context, build_project_context, search_sessions, get_pending_next_steps
+proj = detect_project()
+if not proj:
+    print(json.dumps(None))
+else:
+    sync_rag_context(proj)
+    ctx = build_project_context(proj)
+    last = search_sessions(proj, 1)
+    next_steps = get_pending_next_steps(${JSON.stringify(agentId)}, 3)
+    # Extract first substantive line from context
+    desc = ""
+    for line in ctx.split("\\n"):
+        s = line.strip()
+        if s and not s.startswith("#") and not s.startswith("<!--") and not s.startswith("_") and not s.startswith("📝") and not s.startswith("📋"):
+            desc = s[:80]
+            break
+    print(json.dumps({
+        "project": proj,
+        "description": desc,
+        "last_session": dict(last[0]) if last else None,
+        "next_steps": [dict(ns) for ns in (next_steps or [])],
+    }))
+`);
+  if (!raw || raw === "null") return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+
 export function autoRegisterAgents(): number {
   const raw = runPy(`
 from db import auto_register_agents

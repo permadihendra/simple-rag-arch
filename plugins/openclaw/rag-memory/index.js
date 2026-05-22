@@ -673,6 +673,67 @@ export default definePluginEntry({
       },
     });
 
+    // ── Add rag_whatsup tool (project preview) ────────────────────
+
+    api.registerTool({
+      name: "rag_whatsup",
+      label: "📁 RAG What's Up",
+      description:
+        "Show what's up: detect the current project, sync project context, " +
+        "show project description, last session summary, and pending next steps.",
+      parameters: {
+        type: "object",
+        properties: {},
+      },
+      execute: async () => {
+        if (!dbReady()) {
+          return textResult("⚠ RAG database not available.");
+        }
+        const raw = runPy(`
+from db import detect_project, sync_rag_context, build_project_context, search_sessions, get_pending_next_steps
+proj = detect_project()
+if not proj:
+    print(json.dumps({"error": "No project detected"}))
+else:
+    sync_rag_context(proj)
+    ctx = build_project_context(proj)
+    last = search_sessions(proj, 1)
+    ns = get_pending_next_steps(${JSON.stringify(agentId)}, 3)
+    desc = ""
+    for line in ctx.split("\\n"):
+        s = line.strip()
+        if s and not s.startswith("#") and not s.startswith("<!--") and not s.startswith("_") and not s.startswith("📝") and not s.startswith("📋"):
+            desc = s[:80]
+            break
+    print(json.dumps({
+        "project": proj,
+        "description": desc,
+        "last_session": dict(last[0]) if last else None,
+        "next_steps": [dict(n) for n in (ns or [])],
+    }))
+`);
+        if (!raw) return textResult("❌ Failed to get project preview.");
+        try {
+          const data = JSON.parse(raw);
+          if (data.error) {
+            return textResult("📁 No project detected in current directory.");
+          }
+          const lines = [`📁 ${data.project}`];
+          if (data.description) lines.push(`   ${data.description}`);
+          if (data.last_session) lines.push(`   📋 Last: ${(data.last_session.summary || "no summary").slice(0, 60)}`);
+          if (data.next_steps && data.next_steps.length > 0) {
+            lines.push(`   ➡️ Next: ${data.next_steps[0].description.slice(0, 80)}`);
+            if (data.next_steps.length > 1) {
+              lines.push(`   📍 ${data.next_steps.length - 1} more pending step(s)`);
+            }
+          }
+          return textResult(lines.join("\n"));
+        } catch {
+          return textResult("❌ Failed to parse project preview.");
+        }
+      },
+    });
+
     // ── Before prompt build: inject RAG context + track turns ─────
 
     let currentSessionId = null;
