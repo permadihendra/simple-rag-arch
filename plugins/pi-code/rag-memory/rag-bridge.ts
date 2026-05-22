@@ -58,9 +58,11 @@ export interface RagNextStep {
 function runPy(oneLiner: string): string | null {
   try {
     return execSync(
-      `${VENV_PYTHON} -c ${JSON.stringify(
-        `import sys, json; sys.path.insert(0, ${JSON.stringify(path.join(RAG_DIR, "scripts"))}); ${oneLiner}`
-      )}`,
+      [
+        VENV_PYTHON,
+        "-c",
+        `import sys, json; sys.path.insert(0, ${JSON.stringify(path.join(RAG_DIR, "scripts"))}); ${oneLiner}`,
+      ],
       { encoding: "utf-8", timeout: 10_000 }
     ).trim();
   } catch (e: any) {

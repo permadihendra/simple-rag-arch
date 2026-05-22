@@ -57,7 +57,7 @@ function runPy(oneLiner) {
   if (!dbReady()) return null;
   const pyCode = `import sys, json; sys.path.insert(0, ${JSON.stringify(path.join(getRagDir(), "scripts"))}); ${oneLiner}`;
   try {
-    return execSync(`${getVenvePython()} -c ${JSON.stringify(pyCode)}`, {
+    return execSync([getVenvePython(), "-c", pyCode], {
       encoding: "utf-8",
       timeout: 10_000,
       stdio: ["pipe", "pipe", "pipe"],
