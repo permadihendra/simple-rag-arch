@@ -49,6 +49,7 @@ from db import (
     save_checkpoint, get_pending_tasks, get_recent_sessions,
     search_notes, search_sessions,
     add_note, now,
+    detect_project, sync_rag_context,
 )
 
 # ── Globals ──────────────────────────────────────────────────────────────────
@@ -196,8 +197,8 @@ def _active_session(agent_id: str) -> int | None:
     p = BASE / "runtime" / f".active_session_{agent_id}"
     return int(p.read_text().strip()) if p.exists() else None
 
-def _generate_context(agent_id: str) -> str:
-    prompt = build_runtime_prompt(agent_id)
+def _generate_context(agent_id: str, project_name: str | None = None) -> str:
+    prompt = build_runtime_prompt(agent_id, project_name=project_name)
     p = BASE / "runtime" / "runtime_prompt.md"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(prompt)
@@ -302,6 +303,13 @@ def start(
     plat = _resolve_platform(platform)
     aid = _resolve_agent(agent, plat)
 
+    # Detect project from CWD
+    project_name = None
+    try:
+        project_name = detect_project()
+    except Exception:
+        pass
+
     existing = _active_session(aid)
     if existing is not None:
         sid = existing
@@ -317,7 +325,14 @@ def start(
             summary = (ls.get("summary") or "(no summary)")[:60]
             console.print(f"📋 Last session was [bold]#{ls['id']}[/] ({dur}s) — {summary}")
 
-    prompt = _generate_context(aid)
+    # Sync project context (generates/refreshes rag-context.md)
+    if project_name:
+        try:
+            sync_rag_context(project_name)
+        except Exception:
+            pass
+
+    prompt = _generate_context(aid, project_name=project_name)
     agent_info = get_agent(aid)
     name = agent_info["name"] if agent_info else aid
     plat_info = PLATFORMS.get(plat, {})
@@ -327,9 +342,12 @@ def start(
     title_text = f"● Session {sid} continued" if existing else f"🚀 Session {sid} started"
     title_style = "green" if existing else "bright_green"
 
+    project_line = f"\n📁 Project: [bold]{project_name}[/]" if project_name else ""
+
     console.print(Panel(
         f"[bold]{title_text}[/]\n"
-        f"{icon} [bold]{name}[/] [dim]({aid})[/] on [bold]{plat_label}[/]\n"
+        f"{icon} [bold]{name}[/] [dim]({aid})[/] on [bold]{plat_label}[/]"
+        f"{project_line}\n"
         f"[dim]Runtime prompt:[/] [cyan]{BASE / 'runtime' / 'runtime_prompt.md'}[/]\n"
         f"[dim]Context budget:[/] ~{len(prompt.split())} words / {max_tokens} tokens",
         title="🚀 Agent Launched", border_style=title_style,

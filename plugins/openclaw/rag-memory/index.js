@@ -574,6 +574,28 @@ function buildRagContextString(agentId) {
     }
   }
 
+  // ── Project context ───────────────────────────────────────
+  const projData = runPy(`
+from db import detect_project, build_project_context
+proj = detect_project()
+if proj:
+    ctx = build_project_context(proj)
+    print(json.dumps({"name": proj, "context": ctx}))
+else:
+    print("null")
+`);
+  if (projData && projData !== "null") {
+    try {
+      const pd = JSON.parse(projData);
+      if (pd.name && pd.context) {
+        parts.push(`\n── Project Context (${pd.name}) ──`);
+        parts.push(pd.context);
+      }
+    } catch (e) {
+      // ignore parse errors
+    }
+  }
+
   return parts.length > 0 ? parts.join("\n") : null;
 }
 
