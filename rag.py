@@ -107,6 +107,27 @@ def _sync_openclaw_plugin() -> None:
         pass
 
 
+def _sync_pi_code_extension() -> None:
+    """Sync the latest RAG extension files to Pi Code's extensions directory."""
+    src = BASE / "plugins" / "pi-code" / "rag-memory"
+    dst = Path.home() / ".pi" / "agent" / "extensions" / "rag-memory"
+
+    if not src.exists():
+        console.print(f"[yellow]⚠ Extension source not found: {src}[/]")
+        return
+
+    dst.mkdir(parents=True, exist_ok=True)
+    synced = 0
+    for fname in ["index.ts", "rag-bridge.ts", "README.md"]:
+        sf = src / fname
+        df = dst / fname
+        if sf.exists():
+            shutil.copy2(str(sf), str(df))
+            synced += 1
+
+    console.print(f"[dim]✓ Pi extension: {synced} file(s) synced to {dst}[/]")
+
+
 def _agents_by_platform(platform: str | None = None) -> list[dict]:
     c = _conn()
     if platform:
@@ -405,6 +426,7 @@ def start(
             _sync_openclaw_plugin()
             os.execvp("openclaw", ["openclaw"])
         elif plat == 'pi-code':
+            _sync_pi_code_extension()
             os.execvp("pi", ["pi", "--append-system-prompt", str(rt_path)])
     except FileNotFoundError:
         console.print(f"[red]✗ Command not found. Is it installed and in PATH?[/]")
