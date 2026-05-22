@@ -192,7 +192,8 @@ def _resolve_platform(p: str | None) -> str:
 
 def _resolve_agent(aid: str | None, platform: str | None = None) -> str:
     if aid:
-        if not get_agent(aid):
+        existing = get_agent(aid)
+        if not existing:
             if aid in AGENT_MAP:
                 id_, name, pfile = AGENT_MAP[aid]
                 plat = platform or "openclaw"
@@ -204,6 +205,11 @@ def _resolve_agent(aid: str | None, platform: str | None = None) -> str:
             else:
                 console.print(f"[red]✗ Unknown agent: {aid}[/]")
                 raise typer.Exit(code=1)
+        elif platform and existing.get("platform") != platform:
+            # Fix stale platform in DB
+            c = _conn()
+            c.execute("UPDATE agents SET platform=? WHERE id=?", (platform, aid))
+            c.commit(); c.close()
         return aid
     agents = _agents_by_platform(platform)
     if not agents:
