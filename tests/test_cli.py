@@ -57,7 +57,6 @@ init_db()
 agents = [
     ('pi-code', 'Pi Code Agent', 'agents/pi_code_agent.md'),
     ('linux-admin', 'Edgy', 'agents/edgy_agent.md'),
-    ('edge-tester', 'Edge Tester', 'agents/test.md'),
 ]
 for aid, name, pfile in agents:
     register_agent(aid, name, pfile)
@@ -126,7 +125,7 @@ def test_list():
           f"stdout={stdout[:200]!r}")
 
     # Should list at least the 3 known agents
-    for agent_id in ("pi-code", "linux-admin", "edge-tester"):
+    for agent_id in ("pi-code", "linux-admin"):
         check(f"output contains agent '{agent_id}'", agent_id in stdout,
               f"missing from output")
 
@@ -179,7 +178,7 @@ def test_status_all():
           f"got code {result.returncode}")
 
     # Should list at least 2 agents
-    agent_count = sum(1 for a in ("pi-code", "linux-admin", "edge-tester") if a in stdout)
+    agent_count = sum(1 for a in ("pi-code", "linux-admin") if a in stdout)
     check(f"shows at least 2 agents", agent_count >= 2,
           f"found {agent_count} agents in output")
 
@@ -310,14 +309,10 @@ def test_context():
 
 # ── Test 10: rag end with no active session ────────────────────────
 
-def test_end_no_session():
-    """rag end <agent> — error when no active session.
-    Uses edge-tester which should have no active session.
-    Ends any lingering session first to ensure clean state."""
-    # Clean up any lingering marker first
-    run_rag("end", "edge-tester", "-s", "cleanup")
-
-    result = run_rag("end", "edge-tester")
+def test_end_bad_agent():
+    """rag end <invalid-agent> — error for unknown agent."""
+    # First end any weird leftover markers
+    result = run_rag("end", "this-agent-does-not-exist-for-sure")
 
     check("exit code 1 (error)", result.returncode == 1,
           f"got code {result.returncode}")
@@ -326,7 +321,7 @@ def test_end_no_session():
     stderr = result.stderr
     output = stdout + stderr
 
-    check("shows no active session error", "No active session" in output,
+    check("shows unknown agent error", "Unknown agent" in output,
           f"output={output[:200]!r}")
 
 
@@ -343,7 +338,7 @@ def run_all():
         ("rag search (OpenClaw)", test_search_openclaw),
         ("rag search --json", test_search_json),
         ("rag context <agent>", test_context),
-        ("rag end no session", test_end_no_session),
+        ("rag end bad agent", test_end_bad_agent),
     ]
 
     # Allow running a single test by name

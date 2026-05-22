@@ -67,12 +67,8 @@ PLATFORMS: dict[str, dict] = {
 }
 
 AGENT_MAP: dict[str, tuple[str, str, str]] = {
-    "main":        ("main",        "Ricchys",        "agents/ricchys_agent.md"),
-    "linux-admin": ("linux-admin", "Edgy",           "agents/edgy_agent.md"),
     "pi-code":     ("pi-code",     "Pi Code Agent",  "agents/pi_code_agent.md"),
-    "ops":         ("ops",         "Ops Agent",      "agents/ops_agent.md"),
-    "coder":       ("coder",       "Coder Agent",    "agents/coder_agent.md"),
-    "research":    ("research",    "Research Agent", "agents/research_agent.md"),
+    "linux-admin": ("linux-admin", "Edgy",           "agents/edgy_agent.md"),
 }
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
