@@ -150,9 +150,9 @@ The RAG system manages the dynamic ones:
 ├── CHECKPOINT.md                   ← Progress tracker
 │
 ├── agents/                         ← Agent personas (markdown)
-│   ├── ops_agent.md
-│   ├── coder_agent.md
-│   └── research_agent.md
+│   ├── edgy_agent.md               ← linux-admin / Edgy
+│   ├── pi_code_agent.md            ← pi-code agent
+│   └── widura_agent.md             ← widura-claw / Widura
 │
 ├── memory/
 │   ├── memory.db                   ← Single SQLite DB (source of truth)
@@ -284,9 +284,11 @@ CREATE TABLE next_steps (
 ## V1 Features (All Implemented)
 
 ### 1. Agent Personas ✅
-- 3 personas created: ops, coder, research
+- Active personas: `linux-admin` (Edgy 🦞), `pi-code` (Pi Code Agent ⚡), `widura-claw` (Widura 🧘)
 - Each has: identity, behavior, goals, communication style
 - Stored as markdown in `agents/`
+- **Auto-discovered** on `rag start` / `rag list` — new `.md` files in `agents/` are scanned via `auto_register_agents()`
+- Agent ID comes from `- **ID**:` metadata field, not filename
 - Referenced by `agents` table in SQLite
 
 ### 2. Session Summaries ✅

@@ -90,7 +90,7 @@ while IDs stay meaningful (e.g. `linux-admin`).
 |----------|-------------|
 | **Pi Code** | `session_start`, `rag_configure` tool, `build_context()` |
 | **OpenClaw** | `register()` (plugin load), `rag_configure` tool |
-| **CLI** | `python start_agent.py --register` |
+| **CLI** | `rag start`, `rag list`, `python start_agent.py --register` |
 
 **Lazy registration:** If an agent isn't in the DB but a matching persona
 file exists, `get_agent()` auto-registers it on first lookup. This means

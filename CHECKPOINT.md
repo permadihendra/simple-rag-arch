@@ -120,3 +120,19 @@ Built and deployed swappable plugins for both AI platforms.
 | `/rag-status` rework | ✅ | Shows agent name+id, last 3 sessions with stats, pending checkpoints with icons, N+1 steps, all registered agents |
 | `rag_status` tool rework | ✅ | LLM-facing tool now shows same rich output as slash command |
 | `getRecentSessions` bridge | ✅ | New rag-bridge function for fetching per-agent sessions |
+
+---
+
+## Phase 5: CLI Auto-Discovery & Widura Agent ✅
+
+| Item | Status | Details |
+|------|--------|--------|
+| `rag.py` auto-discover on `start` | ✅ | `auto_register_agents()` called at top of `start()` — new persona files found before interactive picker |
+| `rag.py` auto-discover on `list` | ✅ | `auto_register_agents()` called in `list_cmd()` — `rag list` always up to date |
+| `auto_register_agents` imported | ✅ | Added to import block in `rag.py` |
+| Widura agent created | ✅ | `agents/widura_agent.md` — ID: `widura-claw`, platform: openclaw |
+| Docs updated | ✅ | `PLAN.md` architecture tree + personas section refreshed |
+
+### Key lesson
+
+`rag.py` had its own `AGENT_MAP` and `_resolve_agent` with lazy registration, but the interactive agent picker (`_agents_by_platform`) only queried the DB — new `agents/*.md` files were invisible until `auto_register_agents()` was called explicitly. Fix: call it at the start of both `start()` and `list_cmd()`.

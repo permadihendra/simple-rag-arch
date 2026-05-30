@@ -51,6 +51,7 @@ from db import (
     add_note, now,
     detect_project, sync_rag_context, build_project_context,
     get_pending_next_steps,
+    auto_register_agents,
 )
 
 # ── Globals ──────────────────────────────────────────────────────────────────
@@ -265,6 +266,8 @@ def list_cmd(
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show full details")] = False,
 ):
     """List all agents grouped by platform."""
+    # Auto-discover new agent persona files from agents/ directory
+    auto_register_agents()
     agents = list_agents()
     if not agents:
         console.print("[yellow]⚠ No agents registered.[/]")
@@ -309,6 +312,9 @@ def start(
     max_tokens: Annotated[int, typer.Option("--max-tokens", "-t", help="Context budget")] = 6000,
 ):
     """Start a new session — two-level platform → agent flow."""
+    # Auto-discover new agent persona files from agents/ directory
+    auto_register_agents()
+
     # Smart arg parsing: if first arg isn't a platform but is an agent, swap
     if platform and platform not in PLATFORMS and agent is None:
         agent_candidate = platform
