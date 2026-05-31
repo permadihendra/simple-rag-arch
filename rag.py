@@ -264,6 +264,7 @@ def main_callback():
 @app.command(name="list")
 def list_cmd(
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show full details")] = False,
+    json: Annotated[bool, typer.Option("--json", "-j", help="Output JSON")] = False,
 ):
     """List all agents grouped by platform."""
     # Auto-discover new agent persona files from agents/ directory
@@ -271,6 +272,11 @@ def list_cmd(
     agents = list_agents()
     if not agents:
         console.print("[yellow]⚠ No agents registered.[/]")
+        return
+
+    if json:
+        import json as _json
+        print(_json.dumps(agents, indent=2, default=str))
         return
 
     # Group by platform
@@ -520,6 +526,8 @@ def end(
 @app.command()
 def status(
     agent: Annotated[Optional[str], typer.Argument(help="Agent ID, or all if omitted")] = None,
+    notes: Annotated[bool, typer.Option("--notes", "-n", help="Show recent notes")] = False,
+    json: Annotated[bool, typer.Option("--json", "-j", help="Output raw JSON")] = False,
 ):
     """Show agent status — active session, pending tasks."""
     if agent:
@@ -528,6 +536,8 @@ def status(
         aids = [a["id"] for a in list_agents()]
         if not aids:
             console.print("[yellow]⚠ No agents registered.[/]"); return
+
+    result_data = []
 
     for aid in aids:
         try:
@@ -538,12 +548,30 @@ def status(
         if not info: continue
         plat = info.get("platform", "?")
         picon = PLATFORMS.get(plat, {}).get("icon", "")
-        console.print(f"\n{picon} [bold]{info['name']}[/] [dim]({aid})[/]")
-
         sid = _active_session(aid)
-        console.print(f"  [{'green' if sid else 'dim'}]{'●' if sid else '○'}[/] {f'Active session: [bold]{sid}[/]' if sid else 'No active session'}")
+
+        entry = {
+            "id": aid,
+            "name": info["name"],
+            "platform": plat,
+            "active_session": sid,
+        }
 
         tasks = get_pending_tasks(aid)
+        entry["tasks"] = [{"task_id": t["task_id"], "step": t["step"], "status": t["status"], "retries": t["retry_count"]} for t in tasks]
+
+        if notes:
+            recent_notes = search_notes("*", 5)
+            entry["notes"] = [{"id": n["id"], "title": n["title"], "tags": n.get("tags", ""), "importance": n.get("importance", 0)} for n in recent_notes if n["agent_id"] == aid]
+
+        result_data.append(entry)
+
+        if json:
+            continue
+
+        console.print(f"\n{picon} [bold]{info['name']}[/] [dim]({aid})[/]")
+        console.print(f"  [{'green' if sid else 'dim'}]{'●' if sid else '○'}[/] {f'Active session: [bold]{sid}[/]' if sid else 'No active session'}")
+
         if tasks:
             t = Table(box=box.SIMPLE)
             t.add_column("Task", style="yellow"); t.add_column("Step")
@@ -554,6 +582,15 @@ def status(
             console.print(t)
         else:
             console.print("  [dim]✅ No pending tasks[/]")
+
+        if notes and entry.get("notes"):
+            console.print(f"  [dim]📝 Recent notes ({len(entry['notes'])}):[/]")
+            for n in entry["notes"]:
+                console.print(f"    • [bold]{n['title']}[/] [{n.get('tags', '')}]")
+
+    if json:
+        import json as _json
+        print(_json.dumps(result_data, indent=2, default=str))
 
 @app.command()
 def context(
@@ -569,18 +606,53 @@ def context(
 
 @app.command()
 def search(
-    query: Annotated[str, typer.Argument(help="Search query")],
+    query: Annotated[Optional[str], typer.Argument(help="Search query (optional with --recent)")] = None,
     limit: Annotated[int, typer.Option("--limit", "-l", help="Max results")] = 5,
-    agent: Annotated[Optional[str], typer.Option("--agent", "-a", help="Agent ID for namespace scoring")] = None,
+    agent: Annotated[Optional[str], typer.Option("--agent", "-a", help="Filter results by agent ID")] = None,
     json: Annotated[bool, typer.Option("--json", "-j", help="Output raw JSON")] = False,
+    recent: Annotated[bool, typer.Option("--recent", "-r", help="Show recent notes (no keyword)")] = False,
 ):
-    """Search memory through the Retrieval Router with confidence scoring."""
+    """Search memory through the Retrieval Router with confidence scoring.
+
+    Use --recent to browse most recent notes without a keyword query.
+    Use --agent to filter results to a specific agent.
+    """
     aid = agent or "pi-code"
-    result = retrieve(query, aid, limit)
+    agent_filter = agent  # P2: pass as strict filter to retrieval router
+
+    if recent:
+        # P1: Recent notes mode — bypass retrieval router
+        notes = search_notes("*", limit)
+        if agent:
+            notes = [n for n in notes if n.get("agent_id") == agent]
+        if json:
+            import json as _json
+            print(_json.dumps(notes, indent=2, default=str))
+            return
+        console.print(f"[bold]📝 Recent notes for [cyan]{aid}[/][/]\n")
+        if notes:
+            t = Table(box=box.ROUNDED)
+            t.add_column("#", style="dim")
+            t.add_column("Title", style="bold")
+            t.add_column("Tags")
+            t.add_column("Content")
+            for i, n in enumerate(notes, 1):
+                tags = n.get("tags", "") or ""
+                content = (n.get("content", "") or "")[:80]
+                t.add_row(str(i), n["title"], tags, content)
+            console.print(t)
+        else:
+            console.print("[yellow]No notes found.[/]")
+        return
+
+    if not query:
+        console.print("[yellow]⚠ Provide a query or use --recent to browse notes.[/]")
+        return
+
+    result = retrieve(query, aid, limit, agent_filter=agent_filter)
 
     if json:
         import json as _json
-        # Pure JSON output — no rich formatting
         if not result:
             print(_json.dumps({"error": "Retrieval Router error", "query": query, "agent_id": aid}))
         else:
@@ -592,7 +664,6 @@ def search(
         console.print("[red]✗ Retrieval Router error[/]")
         return
 
-    # Confidence summary
     conf = result["confidence_level"]
     conf_color = {"high": "green", "medium": "yellow", "low": "red"}.get(conf, "white")
     console.print(Panel(
@@ -649,15 +720,26 @@ def daily(
     console.print("[dim]✅ All up to date[/]" if indexed == 0 else f"[bold green]✅ Indexed {indexed} file(s)[/]")
 
 @app.command()
+@app.command(name="note")
 def add_note_cmd(
-    title: Annotated[str, typer.Option("--title", "-t", prompt="Note title")],
-    content: Annotated[str, typer.Option("--content", "-c", prompt="Note content")],
-    agent: Annotated[Optional[str], typer.Option("--agent", "-a")] = "main",
-    tags: Annotated[Optional[str], typer.Option("--tags")] = None,
-    importance: Annotated[int, typer.Option("--importance", "-i")] = 1,
+    title: Annotated[str, typer.Option("--title", "-t", help="Note title", prompt=False)] = ...,
+    content: Annotated[str, typer.Option("--content", "-c", help="Note content", prompt=False)] = ...,
+    agent: Annotated[str, typer.Option("--agent", "-a", help="Agent ID")] = "pi-code",
+    tags: Annotated[Optional[str], typer.Option("--tags", help="Comma-separated tags")] = None,
+    importance: Annotated[int, typer.Option("--importance", "-i", help="Importance 1-5")] = 1,
+    json: Annotated[bool, typer.Option("--json", "-j", help="Output JSON")] = False,
 ):
-    """Add a knowledge note interactively."""
-    note = add_note(agent, title, content, [t.strip() for t in tags.split(",")] if tags else [], importance)
+    """Add a knowledge note. Both --title and --content are required."""
+    if not title or not content:
+        console.print("[red]✗ --title and --content are required.[/]")
+        console.print("[yellow]Usage: rag note --title <title> --content <content> [--agent pi-code] [--tags tag1,tag2] [--importance 3][/]")
+        raise typer.Exit(code=1)
+    tag_list = [t.strip() for t in tags.split(",") if tags] if tags else []
+    note = add_note(agent, title, content, tag_list, importance)
+    if json:
+        import json as _json
+        print(_json.dumps(note, indent=2, default=str))
+        return
     console.print(f"[green]✓[/] Note #{note['id']}: [bold]{title}[/]")
 
 @app.command()

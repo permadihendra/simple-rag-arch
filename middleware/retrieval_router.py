@@ -150,6 +150,7 @@ def retrieve(
     include_checkpoints: bool = True,
     include_sessions: bool = True,
     include_fts: bool = True,
+    agent_filter: str | None = None,
 ) -> dict:
     """
     Full retrieval pipeline.
@@ -186,11 +187,12 @@ def retrieve(
                 all_results.append({
                     "source": "checkpoint",
                     "priority": 1,
-                    "confidence": min(score, 8),  # cap at 8
+                    "confidence": min(score, 8),
                     "content": (
                         f"Task '{cp['task_id']}' step {cp['step']} "
                         f"[{cp['status']}]"
                     ),
+                    "agent_id": agent_id,
                     "task_id": cp["task_id"],
                     "step": cp["step"],
                     "status": cp["status"],
@@ -213,6 +215,7 @@ def retrieve(
                     "priority": 2,
                     "confidence": score,
                     "content": s.get("summary", ""),
+                    "agent_id": s.get("agent_id"),
                     "session_id": s["id"],
                     "what_worked": s.get("what_worked"),
                     "what_failed": s.get("what_failed"),
@@ -235,6 +238,7 @@ def retrieve(
                     "priority": 3,
                     "confidence": n["_confidence"],
                     "content": f"{n['title']}: {n['content']}",
+                    "agent_id": n.get("agent_id"),
                     "note_id": n["id"],
                     "title": n["title"],
                     "tags": n.get("tags", ""),
@@ -275,6 +279,10 @@ def retrieve(
             seen.add(key)
             deduped.append(r)
     all_results = deduped
+
+    # P2: Apply strict agent filter if requested
+    if agent_filter:
+        all_results = [r for r in all_results if r.get("agent_id") == agent_filter]
 
     top_results = all_results[:limit]
     top_score = top_results[0]["confidence"] if top_results else 0

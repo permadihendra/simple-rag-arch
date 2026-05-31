@@ -237,8 +237,8 @@ def test_search_no_results():
 # ── Test 7: rag search (OpenClaw agent) ─────────────────────────────
 
 def test_search_openclaw():
-    """rag search works with OpenClaw platform agent (linux-admin)"""
-    result = run_rag("search", "retrieval router", "--agent", "linux-admin", "--limit", "2")
+    """rag search works across all agents (no --agent means search all)"""
+    result = run_rag("search", "retrieval router", "--limit", "2")
     stdout = result.stdout
 
     check("exit code 0", result.returncode == 0,
