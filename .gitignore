@@ -17,18 +17,9 @@ share/python-wheels/
 *.manifest
 *.spec
 
-# ── RAG database (source of truth, changes constantly) ─────────────────────
-memory/memory.db
-memory/memory.db-wal
-memory/memory.db-shm
-
-# ── Auto-generated exports (derived from DB, not source of truth) ───────────
-memory/notes/*.md
-memory/sessions/*.md
-memory/checkpoints/*.md
-!memory/notes/.gitkeep
-!memory/sessions/.gitkeep
-!memory/checkpoints/.gitkeep
+# ── RAG memory (auto-generated from DB, not source of truth) ──────────────
+memory/
+!memory/logs/.gitkeep
 
 # ── Virtual environments ────────────────────────────────────────────────────
 .env
@@ -80,8 +71,6 @@ runtime/runtime_prompt.md
 
 # ── Logs ────────────────────────────────────────────────────────────────────
 *.log
-memory/logs/*
-!memory/logs/.gitkeep
 
 # ── Editor backups ──────────────────────────────────────────────────────────
 *.bak
