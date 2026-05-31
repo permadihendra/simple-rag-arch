@@ -514,6 +514,47 @@ def get_recent_sessions(agent_id: str, limit: int = 5) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def get_recent_notes(limit: int = 5, agent_id: str | None = None) -> list[dict]:
+    """
+    Get most recent notes via direct SQL (not FTS5).
+
+    FTS5 does not support a "return everything" query — bare "*" is an
+    empty prefix operator that matches nothing. This function uses plain
+    ORDER BY id DESC with optional agent filter instead.
+
+    Args:
+        limit: Max notes to return.
+        agent_id: Optional — filter to a specific agent's notes.
+
+    Returns:
+        List of dicts with all note fields plus 'tags' (comma-separated).
+    """
+    c = _conn()
+    if agent_id:
+        rows = c.execute(
+            """SELECT n.*, GROUP_CONCAT(t.name, ', ') as tags
+               FROM notes n
+               LEFT JOIN note_tags nt ON nt.note_id = n.id
+               LEFT JOIN tags t ON t.id = nt.tag_id
+               WHERE n.agent_id = ?
+               GROUP BY n.id
+               ORDER BY n.id DESC LIMIT ?""",
+            (agent_id, limit),
+        ).fetchall()
+    else:
+        rows = c.execute(
+            """SELECT n.*, GROUP_CONCAT(t.name, ', ') as tags
+               FROM notes n
+               LEFT JOIN note_tags nt ON nt.note_id = n.id
+               LEFT JOIN tags t ON t.id = nt.tag_id
+               GROUP BY n.id
+               ORDER BY n.id DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    c.close()
+    return [dict(r) for r in rows]
+
+
 # ── Checkpoint CRUD ──────────────────────────────────────────────────────────
 
 def save_checkpoint(session_id: int | None, task_id: str, step: int,

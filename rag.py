@@ -47,7 +47,7 @@ from db import (
     register_agent, get_agent, list_agents, _conn,
     start_session, end_session, build_runtime_prompt, build_context,
     save_checkpoint, get_pending_tasks, get_recent_sessions,
-    search_notes, search_sessions,
+    get_recent_notes, search_notes, search_sessions,
     add_note, now,
     detect_project, sync_rag_context, build_project_context,
     get_pending_next_steps,
@@ -561,8 +561,8 @@ def status(
         entry["tasks"] = [{"task_id": t["task_id"], "step": t["step"], "status": t["status"], "retries": t["retry_count"]} for t in tasks]
 
         if notes:
-            recent_notes = search_notes("*", 5)
-            entry["notes"] = [{"id": n["id"], "title": n["title"], "tags": n.get("tags", ""), "importance": n.get("importance", 0)} for n in recent_notes if n["agent_id"] == aid]
+            recent_notes = get_recent_notes(5, aid)
+            entry["notes"] = [{"id": n["id"], "title": n["title"], "tags": n.get("tags", ""), "importance": n.get("importance", 0)} for n in recent_notes]
 
         result_data.append(entry)
 
@@ -622,9 +622,7 @@ def search(
 
     if recent:
         # P1: Recent notes mode — bypass retrieval router
-        notes = search_notes("*", limit)
-        if agent:
-            notes = [n for n in notes if n.get("agent_id") == agent]
+        notes = get_recent_notes(limit, agent)
         if json:
             import json as _json
             print(_json.dumps(notes, indent=2, default=str))
