@@ -81,3 +81,4 @@ runtime/.active_session_*
 # ── Runtime markers (generated per-session) ───────────────────────
 runtime/.restart_marker
 runtime/.rag_target_agent
+plugins/
